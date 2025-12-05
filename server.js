@@ -25,7 +25,7 @@ mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/globalcar
   useNewUrlParser: true,
   useUnifiedTopology: true,
 })
-.then(() => console.log('MongoDB Connected'))
+.then(() => console.log('MongoDB Connected ' + process.env.MONGODB_URI))
 .catch(err => console.error('MongoDB Connection Error:', err));
 
 // Routes
