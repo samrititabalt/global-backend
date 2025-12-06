@@ -12,6 +12,31 @@ router.get('/dashboard', protect, authorize('agent'), async (req, res) => {
   try {
     const agent = req.user;
 
+    // Helper function to add lastMessage and unreadCount to chat sessions
+    const addLastMessageToChats = async (chats) => {
+      return Promise.all(
+        chats.map(async (chat) => {
+          const lastMessage = await Message.findOne({ chatSession: chat._id })
+            .sort({ createdAt: -1 })
+            .populate('sender', 'name email')
+            .lean();
+          
+          const chatObj = chat.toObject ? chat.toObject() : chat;
+          chatObj.lastMessage = lastMessage;
+          
+          // Calculate unread count (messages not from agent and not read)
+          const unreadCount = await Message.countDocuments({
+            chatSession: chat._id,
+            sender: { $ne: agent._id },
+            isRead: false
+          });
+          chatObj.unreadCount = unreadCount;
+          
+          return chatObj;
+        })
+      );
+    };
+
     // Get pending requests for agent's service category
     const pendingRequests = await ChatSession.find({
       service: agent.serviceCategory,
@@ -41,12 +66,17 @@ router.get('/dashboard', protect, authorize('agent'), async (req, res) => {
       .sort({ completedAt: -1 })
       .limit(10);
 
+    // Add lastMessage to all chat arrays
+    const pendingWithLastMessage = await addLastMessageToChats(pendingRequests);
+    const activeWithLastMessage = await addLastMessageToChats(activeChats);
+    const completedWithLastMessage = await addLastMessageToChats(completedCases);
+
     res.json({
       success: true,
       dashboard: {
-        pendingRequests,
-        activeChats,
-        completedCases
+        pendingRequests: pendingWithLastMessage,
+        activeChats: activeWithLastMessage,
+        completedCases: completedWithLastMessage
       }
     });
   } catch (error) {
