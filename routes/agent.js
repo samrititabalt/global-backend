@@ -18,7 +18,7 @@ router.get('/dashboard', protect, authorize('agent'), async (req, res) => {
       status: 'pending',
       agent: null
     })
-      .populate('customer', 'name email')
+      .populate('customer', 'name email isOnline')
       .populate('service', 'name')
       .sort({ createdAt: -1 });
 
@@ -27,7 +27,7 @@ router.get('/dashboard', protect, authorize('agent'), async (req, res) => {
       agent: agent._id,
       status: 'active'
     })
-      .populate('customer', 'name email')
+      .populate('customer', 'name email isOnline')
       .populate('service', 'name')
       .sort({ createdAt: -1 });
 
@@ -36,7 +36,7 @@ router.get('/dashboard', protect, authorize('agent'), async (req, res) => {
       agent: agent._id,
       status: 'completed'
     })
-      .populate('customer', 'name email')
+      .populate('customer', 'name email isOnline')
       .populate('service', 'name')
       .sort({ completedAt: -1 })
       .limit(10);
@@ -103,8 +103,8 @@ router.get('/chat-session/:id', protect, authorize('agent'), async (req, res) =>
       agent: req.user._id
     })
       .populate('service', 'name')
-      .populate('customer', 'name email')
-      .populate('agent', 'name email');
+      .populate('customer', 'name email isOnline')
+      .populate('agent', 'name email isOnline');
 
     if (!chatSession) {
       return res.status(404).json({ message: 'Chat session not found' });
@@ -112,6 +112,8 @@ router.get('/chat-session/:id', protect, authorize('agent'), async (req, res) =>
 
     const messages = await Message.find({ chatSession: chatSession._id })
       .populate('sender', 'name email')
+      .populate('replyTo', 'content messageType attachments fileUrl fileName sender')
+      .populate('replyTo.sender', 'name')
       .sort({ createdAt: 1 });
 
     res.json({

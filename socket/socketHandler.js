@@ -69,23 +69,37 @@ const socketHandler = (io) => {
         
         socket.join(`chat_${chatSessionId}`);
         
-        // Emit user online status to this chat
+        // Get user and chat session info
         const user = await User.findById(socket.userId);
-        if (user) {
-          socket.to(`chat_${chatSessionId}`).emit('userOnline', {
-            userId: socket.userId,
-            role: user.role,
-            isOnline: true
-          });
-        }
-        
         const chatSession = await ChatSession.findById(chatSessionId)
-          .populate('customer', 'name')
-          .populate('agent', 'name')
+          .populate('customer', 'name email isOnline')
+          .populate('agent', 'name email isOnline')
           .populate('service', 'name');
-
-        if (!chatSession) {
-          return;
+        
+        if (!user || !chatSession) return;
+        
+        // Emit user online status to this chat (to other users in the chat)
+        socket.to(`chat_${chatSessionId}`).emit('userOnline', {
+          userId: socket.userId,
+          role: user.role,
+          isOnline: true
+        });
+        
+        // Also emit the other user's current online status to the joining user
+        if (user.role === 'customer' && chatSession.agent) {
+          // Customer joined, send agent's status
+          socket.emit('userOnline', {
+            userId: chatSession.agent._id,
+            role: 'agent',
+            isOnline: chatSession.agent.isOnline || false
+          });
+        } else if (user.role === 'agent' && chatSession.customer) {
+          // Agent joined, send customer's status
+          socket.emit('userOnline', {
+            userId: chatSession.customer._id,
+            role: 'customer',
+            isOnline: chatSession.customer.isOnline || false
+          });
         }
 
         // Send AI messages if this is a new chat and customer is joining
