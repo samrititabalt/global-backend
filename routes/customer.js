@@ -99,7 +99,30 @@ router.get('/chat-sessions', protect, authorize('customer'), async (req, res) =>
       .populate('agent', 'name email isOnline')
       .sort({ createdAt: -1 });
 
-    res.json({ success: true, chatSessions });
+    // Add lastMessage to each chat session
+    const chatSessionsWithLastMessage = await Promise.all(
+      chatSessions.map(async (chat) => {
+        const lastMessage = await Message.findOne({ chatSession: chat._id })
+          .sort({ createdAt: -1 })
+          .populate('sender', 'name email')
+          .lean();
+        
+        const chatObj = chat.toObject();
+        chatObj.lastMessage = lastMessage;
+        
+        // Calculate unread count
+        const unreadCount = await Message.countDocuments({
+          chatSession: chat._id,
+          sender: { $ne: req.user._id },
+          isRead: false
+        });
+        chatObj.unreadCount = unreadCount;
+        
+        return chatObj;
+      })
+    );
+
+    res.json({ success: true, chatSessions: chatSessionsWithLastMessage });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
   }
