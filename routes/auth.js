@@ -115,6 +115,8 @@ router.post('/login', [
         isOnline: user.isOnline
       }
     });
+    console.log("login successfull");
+    
   } catch (error) {
     console.error('Login error:', error);
     res.status(500).json({ message: 'Server error', error: error.message });

@@ -30,6 +30,19 @@ const messageSchema = new mongoose.Schema({
   fileName: {
     type: String
   },
+  attachments: [{
+    type: {
+      type: String,
+      enum: ['image', 'audio', 'file']
+    },
+    url: String,
+    publicId: String,
+    fileName: String,
+    size: Number,
+    width: Number,
+    height: Number,
+    duration: Number
+  }],
   isRead: {
     type: Boolean,
     default: false

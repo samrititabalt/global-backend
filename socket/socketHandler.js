@@ -234,22 +234,35 @@ const socketHandler = (io) => {
 
     // WebRTC signaling
     socket.on('offer', (data) => {
+      if (!socket.userId) return;
       socket.to(`chat_${data.chatSessionId}`).emit('offer', {
         offer: data.offer,
-        from: socket.userId
+        from: socket.userId,
+        chatSessionId: data.chatSessionId
       });
     });
 
     socket.on('answer', (data) => {
+      if (!socket.userId) return;
       socket.to(`chat_${data.chatSessionId}`).emit('answer', {
         answer: data.answer,
-        from: socket.userId
+        from: socket.userId,
+        chatSessionId: data.chatSessionId
       });
     });
 
     socket.on('ice-candidate', (data) => {
+      if (!socket.userId) return;
       socket.to(`chat_${data.chatSessionId}`).emit('ice-candidate', {
         candidate: data.candidate,
+        from: socket.userId,
+        chatSessionId: data.chatSessionId
+      });
+    });
+
+    socket.on('callEnded', (data) => {
+      if (!socket.userId) return;
+      socket.to(`chat_${data.chatSessionId}`).emit('callEnded', {
         from: socket.userId
       });
     });

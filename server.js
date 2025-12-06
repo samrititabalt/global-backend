@@ -36,6 +36,9 @@ app.use('/api/admin', require('./routes/admin'));
 app.use('/api/chat', require('./routes/chat'));
 app.use('/api/payment', require('./routes/payment'));
 
+// Make io available to routes
+app.set('io', io);
+
 // Socket.io Connection Handling
 const socketHandler = require('./socket/socketHandler');
 socketHandler(io);

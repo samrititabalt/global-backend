@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { protect } = require('../middleware/auth');
-const upload = require('../middleware/upload');
+const { upload, uploadToCloudinary } = require('../middleware/cloudinaryUpload');
 const Message = require('../models/Message');
 const ChatSession = require('../models/ChatSession');
 const { deductToken, checkTokenBalance } = require('../services/tokenService');
@@ -69,15 +69,15 @@ router.post('/message', protect, upload.none(), async (req, res) => {
 });
 
 // @route   POST /api/chat/upload
-// @desc    Upload file/image/audio
+// @desc    Upload file/image/audio to Cloudinary
 // @access  Private
 router.post('/upload', protect, upload.fields([
-  { name: 'image', maxCount: 1 },
-  { name: 'file', maxCount: 1 },
+  { name: 'image', maxCount: 5 },
+  { name: 'file', maxCount: 5 },
   { name: 'audio', maxCount: 1 }
-]), async (req, res) => {
+]), uploadToCloudinary, async (req, res) => {
   try {
-    const { chatSessionId } = req.body;
+    const { chatSessionId, content } = req.body;
     const sender = req.user;
 
     // Verify chat session
@@ -104,32 +104,34 @@ router.post('/upload', protect, upload.fields([
       }
     }
 
-    let messageType = 'text';
-    let fileUrl = '';
-    let fileName = '';
-
-    if (req.files.image) {
-      messageType = 'image';
-      fileUrl = `/uploads/images/${req.files.image[0].filename}`;
-      fileName = req.files.image[0].originalname;
-    } else if (req.files.file) {
-      messageType = 'file';
-      fileUrl = `/uploads/files/${req.files.file[0].filename}`;
-      fileName = req.files.file[0].originalname;
-    } else if (req.files.audio) {
-      messageType = 'audio';
-      fileUrl = `/uploads/audio/${req.files.audio[0].filename}`;
-      fileName = req.files.audio[0].originalname;
+    // Check if files were uploaded
+    if (!req.uploadedFiles || req.uploadedFiles.length === 0) {
+      return res.status(400).json({ message: 'No files uploaded' });
     }
 
-    // Create message
+    // Determine message type based on first file
+    const firstFile = req.uploadedFiles[0];
+    const messageType = firstFile.type;
+
+    // Create message with Cloudinary URLs
     const message = await Message.create({
       chatSession: chatSessionId,
       sender: sender._id,
       senderRole: sender.role,
+      content: content || '',
       messageType,
-      fileUrl,
-      fileName
+      fileUrl: firstFile.url,
+      fileName: firstFile.fileName,
+      // Store all uploaded files as attachments
+      attachments: req.uploadedFiles.map(file => ({
+        type: file.type,
+        url: file.url,
+        publicId: file.publicId,
+        fileName: file.fileName,
+        size: file.size,
+        ...(file.width && { width: file.width, height: file.height }),
+        ...(file.duration && { duration: file.duration }),
+      })),
     });
 
     // Deduct token for customer messages
@@ -137,8 +139,20 @@ router.post('/upload', protect, upload.fields([
       await deductToken(sender._id, message._id);
     }
 
+    // Mark chat as active if it was pending
+    if (chatSession.status === 'pending') {
+      chatSession.status = 'active';
+      await chatSession.save();
+    }
+
     const populatedMessage = await Message.findById(message._id)
       .populate('sender', 'name email');
+
+    // Emit to socket for real-time update
+    const io = req.app.get('io');
+    if (io) {
+      io.to(`chat_${chatSessionId}`).emit('newMessage', populatedMessage);
+    }
 
     res.json({ success: true, message: populatedMessage });
   } catch (error) {
