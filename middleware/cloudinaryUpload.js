@@ -51,6 +51,14 @@ const uploadToCloudinary = async (req, res, next) => {
     return next();
   }
 
+  // Check if Cloudinary is configured
+  if (!process.env.CLOUDINARY_CLOUD_NAME || !process.env.CLOUDINARY_API_KEY || !process.env.CLOUDINARY_API_SECRET) {
+    return res.status(500).json({
+      message: 'Cloudinary is not configured. Please set CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, and CLOUDINARY_API_SECRET in your .env file',
+      error: 'Cloudinary configuration missing'
+    });
+  }
+
   try {
     const uploadPromises = [];
 
@@ -66,7 +74,11 @@ const uploadToCloudinary = async (req, res, next) => {
             size: result.bytes,
             width: result.width,
             height: result.height,
-          }));
+          }))
+          .catch(error => {
+            console.error(`Error uploading image ${file.originalname}:`, error);
+            throw new Error(`Failed to upload image: ${error.message}`);
+          });
         uploadPromises.push(uploadPromise);
       }
     }
@@ -82,7 +94,11 @@ const uploadToCloudinary = async (req, res, next) => {
             fileName: file.originalname,
             size: result.bytes,
             duration: result.duration,
-          }));
+          }))
+          .catch(error => {
+            console.error(`Error uploading audio ${file.originalname}:`, error);
+            throw new Error(`Failed to upload audio: ${error.message}`);
+          });
         uploadPromises.push(uploadPromise);
       }
     }
@@ -97,7 +113,11 @@ const uploadToCloudinary = async (req, res, next) => {
             publicId: result.publicId,
             fileName: file.originalname,
             size: result.bytes,
-          }));
+          }))
+          .catch(error => {
+            console.error(`Error uploading file ${file.originalname}:`, error);
+            throw new Error(`Failed to upload file: ${error.message}`);
+          });
         uploadPromises.push(uploadPromise);
       }
     }
@@ -111,7 +131,8 @@ const uploadToCloudinary = async (req, res, next) => {
     console.error('Cloudinary upload error:', error);
     return res.status(500).json({
       message: 'File upload failed',
-      error: error.message
+      error: error.message || 'Unknown upload error',
+      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
   }
 };

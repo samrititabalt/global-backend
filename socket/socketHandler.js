@@ -26,15 +26,32 @@ const socketHandler = (io) => {
         // Update user online status
         const user = await User.findById(userId);
         if (user) {
+          user.isOnline = true;
+          await user.save();
+          
+          // Notify that user is online
           if (user.role === 'agent') {
-            user.isOnline = true;
-            await user.save();
-            // Notify that agent is online
+            // Emit to all clients that this agent is online
             io.emit('agentOnline', { agentId: userId });
+            // Also emit to specific chat sessions where this agent is active
+            const agentChats = await ChatSession.find({ agent: userId });
+            agentChats.forEach(chat => {
+              io.to(`chat_${chat._id}`).emit('userOnline', { 
+                userId: userId,
+                role: 'agent',
+                isOnline: true 
+              });
+            });
           } else if (user.role === 'customer') {
-            // Update customer online status (for future use)
-            user.isOnline = true;
-            await user.save();
+            // Emit to chat sessions where this customer is active
+            const customerChats = await ChatSession.find({ customer: userId });
+            customerChats.forEach(chat => {
+              io.to(`chat_${chat._id}`).emit('userOnline', { 
+                userId: userId,
+                role: 'customer',
+                isOnline: true 
+              });
+            });
           }
         }
         
@@ -48,7 +65,19 @@ const socketHandler = (io) => {
     // Join chat room
     socket.on('joinChat', async (chatSessionId) => {
       try {
+        if (!socket.userId) return;
+        
         socket.join(`chat_${chatSessionId}`);
+        
+        // Emit user online status to this chat
+        const user = await User.findById(socket.userId);
+        if (user) {
+          socket.to(`chat_${chatSessionId}`).emit('userOnline', {
+            userId: socket.userId,
+            role: user.role,
+            isOnline: true
+          });
+        }
         
         const chatSession = await ChatSession.findById(chatSessionId)
           .populate('customer', 'name')
@@ -77,8 +106,24 @@ const socketHandler = (io) => {
     });
 
     // Leave chat room
-    socket.on('leaveChat', (chatSessionId) => {
-      socket.leave(`chat_${chatSessionId}`);
+    socket.on('leaveChat', async (chatSessionId) => {
+      try {
+        socket.leave(`chat_${chatSessionId}`);
+        
+        // Emit user offline status to this chat
+        if (socket.userId) {
+          const user = await User.findById(socket.userId);
+          if (user) {
+            socket.to(`chat_${chatSessionId}`).emit('userOffline', {
+              userId: socket.userId,
+              role: user.role,
+              isOnline: false
+            });
+          }
+        }
+      } catch (error) {
+        console.error('Leave chat error:', error);
+      }
     });
 
     // Send message
@@ -326,13 +371,31 @@ const socketHandler = (io) => {
         if (socket.userId) {
           const user = await User.findById(socket.userId);
           if (user) {
+            user.isOnline = false;
+            await user.save();
+            
+            // Notify that user is offline
             if (user.role === 'agent') {
-              user.isOnline = false;
-              await user.save();
               io.emit('agentOffline', { agentId: user._id });
+              // Emit to specific chat sessions
+              const agentChats = await ChatSession.find({ agent: user._id });
+              agentChats.forEach(chat => {
+                io.to(`chat_${chat._id}`).emit('userOffline', { 
+                  userId: user._id,
+                  role: 'agent',
+                  isOnline: false 
+                });
+              });
             } else if (user.role === 'customer') {
-              user.isOnline = false;
-              await user.save();
+              // Emit to chat sessions where this customer is active
+              const customerChats = await ChatSession.find({ customer: user._id });
+              customerChats.forEach(chat => {
+                io.to(`chat_${chat._id}`).emit('userOffline', { 
+                  userId: user._id,
+                  role: 'customer',
+                  isOnline: false 
+                });
+              });
             }
           }
           

@@ -88,7 +88,7 @@ router.post('/upload', protect, upload.fields([
   { name: 'audio', maxCount: 1 }
 ]), uploadToCloudinary, async (req, res) => {
   try {
-    const { chatSessionId, content } = req.body;
+    const { chatSessionId, content, replyTo } = req.body;
     const sender = req.user;
 
     // Verify chat session
