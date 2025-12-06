@@ -75,6 +75,10 @@ const messageSchema = new mongoose.Schema({
   originalContent: {
     type: String  // Store original content for deleted messages
   },
+  replyTo: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Message'
+  },
   createdAt: {
     type: Date,
     default: Date.now

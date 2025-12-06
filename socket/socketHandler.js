@@ -84,7 +84,7 @@ const socketHandler = (io) => {
     // Send message
     socket.on('sendMessage', async (data) => {
       try {
-        const { chatSessionId, content, messageType, fileUrl, fileName } = data;
+        const { chatSessionId, content, messageType, fileUrl, fileName, replyTo } = data;
         const senderId = socket.userId;
 
         if (!senderId) {
@@ -122,6 +122,14 @@ const socketHandler = (io) => {
           }
         }
 
+        // Verify replyTo message if provided
+        if (replyTo) {
+          const replyToMessage = await Message.findById(replyTo);
+          if (!replyToMessage || replyToMessage.chatSession.toString() !== chatSessionId) {
+            return socket.emit('error', { message: 'Invalid reply message' });
+          }
+        }
+
         // Create message
         const message = await Message.create({
           chatSession: chatSessionId,
@@ -130,7 +138,8 @@ const socketHandler = (io) => {
           content: content || '',
           messageType: messageType || 'text',
           fileUrl: fileUrl || '',
-          fileName: fileName || ''
+          fileName: fileName || '',
+          replyTo: replyTo || null
         });
 
         // Deduct token for customer messages
@@ -149,7 +158,9 @@ const socketHandler = (io) => {
 
         // Populate message
         const populatedMessage = await Message.findById(message._id)
-          .populate('sender', 'name email');
+          .populate('sender', 'name email')
+          .populate('replyTo', 'content messageType attachments fileUrl fileName sender')
+          .populate('replyTo.sender', 'name');
 
         // Convert to plain object for socket emission
         const messageData = {
@@ -161,6 +172,8 @@ const socketHandler = (io) => {
           messageType: populatedMessage.messageType,
           fileUrl: populatedMessage.fileUrl,
           fileName: populatedMessage.fileName,
+          replyTo: populatedMessage.replyTo,
+          attachments: populatedMessage.attachments,
           isRead: populatedMessage.isRead,
           readAt: populatedMessage.readAt,
           createdAt: populatedMessage.createdAt,

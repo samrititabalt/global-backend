@@ -38,13 +38,22 @@ router.post('/message', protect, upload.none(), async (req, res) => {
       }
     }
 
+    // Verify replyTo message if provided
+    if (replyTo) {
+      const replyToMessage = await Message.findById(replyTo);
+      if (!replyToMessage || replyToMessage.chatSession.toString() !== chatSessionId) {
+        return res.status(400).json({ message: 'Invalid reply message' });
+      }
+    }
+
     // Create message
     const message = await Message.create({
       chatSession: chatSessionId,
       sender: sender._id,
       senderRole: sender.role,
       content,
-      messageType: 'text'
+      messageType: 'text',
+      replyTo: replyTo || null
     });
 
     // Deduct token for customer messages
@@ -59,7 +68,9 @@ router.post('/message', protect, upload.none(), async (req, res) => {
     }
 
     const populatedMessage = await Message.findById(message._id)
-      .populate('sender', 'name email');
+      .populate('sender', 'name email')
+      .populate('replyTo', 'content messageType attachments fileUrl fileName sender')
+      .populate('replyTo.sender', 'name');
 
     res.json({ success: true, message: populatedMessage });
   } catch (error) {
@@ -109,6 +120,14 @@ router.post('/upload', protect, upload.fields([
       return res.status(400).json({ message: 'No files uploaded' });
     }
 
+    // Verify replyTo message if provided
+    if (replyTo) {
+      const replyToMessage = await Message.findById(replyTo);
+      if (!replyToMessage || replyToMessage.chatSession.toString() !== chatSessionId) {
+        return res.status(400).json({ message: 'Invalid reply message' });
+      }
+    }
+
     // Determine message type based on first file
     const firstFile = req.uploadedFiles[0];
     const messageType = firstFile.type;
@@ -122,6 +141,7 @@ router.post('/upload', protect, upload.fields([
       messageType,
       fileUrl: firstFile.url,
       fileName: firstFile.fileName,
+      replyTo: replyTo || null,
       // Store all uploaded files as attachments
       attachments: req.uploadedFiles.map(file => ({
         type: file.type,
@@ -146,7 +166,9 @@ router.post('/upload', protect, upload.fields([
     }
 
     const populatedMessage = await Message.findById(message._id)
-      .populate('sender', 'name email');
+      .populate('sender', 'name email')
+      .populate('replyTo', 'content messageType attachments fileUrl fileName sender')
+      .populate('replyTo.sender', 'name');
 
     // Emit to socket for real-time update
     const io = req.app.get('io');
@@ -182,6 +204,8 @@ router.get('/sessions/:id/messages', protect, async (req, res) => {
 
     const messages = await Message.find({ chatSession: req.params.id })
       .populate('sender', 'name email')
+      .populate('replyTo', 'content messageType attachments fileUrl fileName sender')
+      .populate('replyTo.sender', 'name')
       .sort({ createdAt: 1 });
 
     res.json({ success: true, messages });
