@@ -222,5 +222,132 @@ router.put('/message/:id/read', protect, async (req, res) => {
   }
 });
 
+// @route   PUT /api/chat/message/:id
+// @desc    Edit a message
+// @access  Private
+router.put('/message/:id', protect, async (req, res) => {
+  try {
+    const { content } = req.body;
+    const sender = req.user;
+
+    if (!content || !content.trim()) {
+      return res.status(400).json({ message: 'Message content is required' });
+    }
+
+    const message = await Message.findById(req.params.id)
+      .populate('chatSession');
+
+    if (!message) {
+      return res.status(404).json({ message: 'Message not found' });
+    }
+
+    // Check if message is deleted
+    if (message.isDeleted) {
+      return res.status(400).json({ message: 'Cannot edit a deleted message' });
+    }
+
+    // Check if user is the sender
+    if (message.sender.toString() !== sender._id.toString()) {
+      return res.status(403).json({ message: 'You can only edit your own messages' });
+    }
+
+    // Check if user is part of this chat
+    const chatSession = message.chatSession;
+    if (sender.role === 'customer' && chatSession.customer.toString() !== sender._id.toString()) {
+      return res.status(403).json({ message: 'Unauthorized' });
+    }
+    if (sender.role === 'agent' && chatSession.agent && chatSession.agent.toString() !== sender._id.toString()) {
+      return res.status(403).json({ message: 'Unauthorized' });
+    }
+
+    // Store original content if first edit
+    if (!message.isEdited) {
+      message.originalContent = message.content;
+    }
+
+    // Update message
+    message.content = content.trim();
+    message.isEdited = true;
+    message.editedAt = new Date();
+    await message.save();
+
+    const populatedMessage = await Message.findById(message._id)
+      .populate('sender', 'name email');
+
+    // Emit to socket for real-time update
+    const io = req.app.get('io');
+    if (io) {
+      io.to(`chat_${chatSession._id}`).emit('messageEdited', populatedMessage);
+    }
+
+    res.json({ success: true, message: populatedMessage });
+  } catch (error) {
+    console.error('Edit message error:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   DELETE /api/chat/message/:id
+// @desc    Delete a message
+// @access  Private
+router.delete('/message/:id', protect, async (req, res) => {
+  try {
+    const sender = req.user;
+
+    const message = await Message.findById(req.params.id)
+      .populate('chatSession');
+
+    if (!message) {
+      return res.status(404).json({ message: 'Message not found' });
+    }
+
+    // Check if already deleted
+    if (message.isDeleted) {
+      return res.status(400).json({ message: 'Message already deleted' });
+    }
+
+    // Check if user is the sender
+    if (message.sender.toString() !== sender._id.toString()) {
+      return res.status(403).json({ message: 'You can only delete your own messages' });
+    }
+
+    // Check if user is part of this chat
+    const chatSession = message.chatSession;
+    if (sender.role === 'customer' && chatSession.customer.toString() !== sender._id.toString()) {
+      return res.status(403).json({ message: 'Unauthorized' });
+    }
+    if (sender.role === 'agent' && chatSession.agent && chatSession.agent.toString() !== sender._id.toString()) {
+      return res.status(403).json({ message: 'Unauthorized' });
+    }
+
+    // Store original content before deletion
+    if (!message.originalContent) {
+      message.originalContent = message.content;
+    }
+
+    // Mark as deleted (soft delete)
+    message.isDeleted = true;
+    message.deletedAt = new Date();
+    message.content = ''; // Clear content
+    message.fileUrl = ''; // Clear file URL
+    message.attachments = []; // Clear attachments
+    await message.save();
+
+    const populatedMessage = await Message.findById(message._id)
+      .populate('sender', 'name email');
+
+    // Emit to socket for real-time update
+    const io = req.app.get('io');
+    if (io) {
+      io.to(`chat_${chatSession._id}`).emit('messageDeleted', populatedMessage);
+    }
+
+    res.json({ success: true, message: populatedMessage });
+  } catch (error) {
+    console.error('Delete message error:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
 module.exports = router;
 

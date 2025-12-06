@@ -58,10 +58,39 @@ const messageSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
+  isEdited: {
+    type: Boolean,
+    default: false
+  },
+  editedAt: {
+    type: Date
+  },
+  isDeleted: {
+    type: Boolean,
+    default: false
+  },
+  deletedAt: {
+    type: Date
+  },
+  originalContent: {
+    type: String  // Store original content for deleted messages
+  },
   createdAt: {
     type: Date,
     default: Date.now
+  },
+  updatedAt: {
+    type: Date,
+    default: Date.now
   }
+});
+
+// Update the updatedAt field before saving
+messageSchema.pre('save', function(next) {
+  if (this.isModified() && !this.isNew) {
+    this.updatedAt = Date.now();
+  }
+  next();
 });
 
 module.exports = mongoose.model('Message', messageSchema);

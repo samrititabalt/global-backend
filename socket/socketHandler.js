@@ -267,6 +267,9 @@ const socketHandler = (io) => {
       });
     });
 
+    // Message edit/delete events are handled via HTTP API and emitted there
+    // Socket events 'messageEdited' and 'messageDeleted' are emitted from routes
+
     // Agent goes offline - reassign chats
     socket.on('agentOffline', async () => {
       try {
