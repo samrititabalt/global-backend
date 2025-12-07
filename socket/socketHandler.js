@@ -26,8 +26,8 @@ const socketHandler = (io) => {
         // Update user online status
         const user = await User.findById(userId);
         if (user) {
-          user.isOnline = true;
-          await user.save();
+            user.isOnline = true;
+            await user.save();
           
           // Notify that user is online
           if (user.role === 'agent') {
@@ -75,7 +75,7 @@ const socketHandler = (io) => {
           .populate('customer', 'name email isOnline')
           .populate('agent', 'name email isOnline')
           .populate('service', 'name');
-        
+
         if (!user || !chatSession) return;
         
         // Emit user online status to this chat (to other users in the chat)
@@ -122,7 +122,7 @@ const socketHandler = (io) => {
     // Leave chat room
     socket.on('leaveChat', async (chatSessionId) => {
       try {
-        socket.leave(`chat_${chatSessionId}`);
+      socket.leave(`chat_${chatSessionId}`);
         
         // Emit user offline status to this chat
         if (socket.userId) {
@@ -385,8 +385,8 @@ const socketHandler = (io) => {
         if (socket.userId) {
           const user = await User.findById(socket.userId);
           if (user) {
-            user.isOnline = false;
-            await user.save();
+              user.isOnline = false;
+              await user.save();
             
             // Notify that user is offline
             if (user.role === 'agent') {
