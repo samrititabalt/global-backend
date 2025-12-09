@@ -34,6 +34,7 @@ app.use('/api/customer', require('./routes/customer'));
 app.use('/api/agent', require('./routes/agent'));
 app.use('/api/admin', require('./routes/admin'));
 app.use('/api/chat', require('./routes/chat'));
+app.use('/api/call', require('./routes/call'));
 app.use('/api/payment', require('./routes/payment'));
 
 // Make io available to routes

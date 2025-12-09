@@ -1,6 +1,7 @@
 const User = require('../models/User');
 const ChatSession = require('../models/ChatSession');
 const Message = require('../models/Message');
+const Call = require('../models/Call');
 const { sendAIMessages } = require('../services/aiMessages');
 const { assignAgent, reassignAgent } = require('../services/agentAssignment');
 const { deductToken, checkTokenBalance } = require('../services/tokenService');
@@ -332,11 +333,69 @@ const socketHandler = (io) => {
       });
     });
 
-    socket.on('callEnded', (data) => {
+    socket.on('callEnded', async (data) => {
       if (!socket.userId) return;
-      socket.to(`chat_${data.chatSessionId}`).emit('callEnded', {
-        from: socket.userId
-      });
+      try {
+        const { chatSessionId, duration, initiator, currentUser } = data;
+        
+        // Emit to other party
+        socket.to(`chat_${chatSessionId}`).emit('callEnded', {
+          from: socket.userId,
+          duration: duration || 0
+        });
+
+        // Save call record and message if call was connected (duration > 0)
+        if (duration && duration > 0 && initiator) {
+          const chatSession = await ChatSession.findById(chatSessionId);
+          if (chatSession) {
+            const callerId = initiator.toString();
+            
+            // Determine caller and receiver
+            const caller = callerId === chatSession.customer.toString() 
+              ? await User.findById(chatSession.customer)
+              : await User.findById(chatSession.agent);
+            const receiver = callerId === chatSession.customer.toString()
+              ? await User.findById(chatSession.agent)
+              : await User.findById(chatSession.customer);
+
+            if (caller && receiver) {
+              // Save call history
+              await Call.create({
+                chatSession: chatSessionId,
+                caller: caller._id,
+                receiver: receiver._id,
+                callerRole: caller.role,
+                receiverRole: receiver.role,
+                duration: duration,
+                status: 'ended',
+                endedAt: new Date()
+              });
+
+              // Create call message in chat
+              const callMessage = await Message.create({
+                chatSession: chatSessionId,
+                sender: caller._id,
+                senderRole: caller.role,
+                messageType: 'call',
+                callDuration: duration,
+                callDirection: 'outgoing',
+                content: `${caller.name} called ${receiver.name}`,
+                createdAt: new Date()
+              });
+
+              // Populate and emit to chat
+              await callMessage.populate('sender', 'name email');
+              io.to(`chat_${chatSessionId}`).emit('newMessage', callMessage);
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Error handling callEnded:', error);
+        // Still emit callEnded even if saving fails
+        socket.to(`chat_${data.chatSessionId}`).emit('callEnded', {
+          from: socket.userId
+        });
+      }
     });
 
     // Message edit/delete events are handled via HTTP API and emitted there
