@@ -321,7 +321,8 @@ const socketHandler = (io) => {
       socket.to(`chat_${data.chatSessionId}`).emit('answer', {
         answer: data.answer,
         from: socket.userId,
-        chatSessionId: data.chatSessionId
+        chatSessionId: data.chatSessionId,
+        isRenegotiation: data.isRenegotiation || false // Pass renegotiation flag
       });
     });
 
@@ -345,50 +346,69 @@ const socketHandler = (io) => {
           duration: duration || 0
         });
 
-        // Save call record and message if call was connected (duration > 0)
-        if (duration && duration > 0 && initiator) {
-          const chatSession = await ChatSession.findById(chatSessionId);
-          if (chatSession) {
-            const callerId = initiator.toString();
-            
-            // Determine caller and receiver
-            const caller = callerId === chatSession.customer.toString() 
-              ? await User.findById(chatSession.customer)
-              : await User.findById(chatSession.agent);
-            const receiver = callerId === chatSession.customer.toString()
-              ? await User.findById(chatSession.agent)
-              : await User.findById(chatSession.customer);
+        // Save call record and message if call was connected (duration >= 0 and initiator exists)
+        // Allow duration 0 for missed/rejected calls, but still save history
+        if (initiator && chatSessionId) {
+          try {
+            const chatSession = await ChatSession.findById(chatSessionId);
+            if (chatSession) {
+              const callerId = initiator.toString();
+              
+              // Determine caller and receiver
+              const caller = callerId === chatSession.customer.toString() 
+                ? await User.findById(chatSession.customer)
+                : await User.findById(chatSession.agent);
+              const receiver = callerId === chatSession.customer.toString()
+                ? await User.findById(chatSession.agent)
+                : await User.findById(chatSession.customer);
 
-            if (caller && receiver) {
-              // Save call history
-              await Call.create({
-                chatSession: chatSessionId,
-                caller: caller._id,
-                receiver: receiver._id,
-                callerRole: caller.role,
-                receiverRole: receiver.role,
-                duration: duration,
-                status: 'ended',
-                endedAt: new Date()
-              });
+              if (caller && receiver) {
+                // Determine call status based on duration
+                const callStatus = duration > 0 ? 'ended' : 'missed';
+                
+                // Save call history - always save if initiator exists
+                const callRecord = await Call.create({
+                  chatSession: chatSessionId,
+                  caller: caller._id,
+                  receiver: receiver._id,
+                  callerRole: caller.role,
+                  receiverRole: receiver.role,
+                  duration: duration || 0,
+                  status: callStatus,
+                  endedAt: new Date()
+                });
 
-              // Create call message in chat
-              const callMessage = await Message.create({
-                chatSession: chatSessionId,
-                sender: caller._id,
-                senderRole: caller.role,
-                messageType: 'call',
-                callDuration: duration,
-                callDirection: 'outgoing',
-                content: `${caller.name} called ${receiver.name}`,
-                createdAt: new Date()
-              });
+                console.log('Call history saved:', callRecord._id);
 
-              // Populate and emit to chat
-              await callMessage.populate('sender', 'name email');
-              io.to(`chat_${chatSessionId}`).emit('newMessage', callMessage);
+                // Create call message in chat only if call was connected (duration > 0)
+                if (duration > 0) {
+                  const callMessage = await Message.create({
+                    chatSession: chatSessionId,
+                    sender: caller._id,
+                    senderRole: caller.role,
+                    messageType: 'call',
+                    callDuration: duration,
+                    callDirection: 'outgoing',
+                    content: `${caller.name} called ${receiver.name}`,
+                    createdAt: new Date()
+                  });
+
+                  // Populate and emit to chat
+                  await callMessage.populate('sender', 'name email');
+                  io.to(`chat_${chatSessionId}`).emit('newMessage', callMessage);
+                  console.log('Call message created and emitted:', callMessage._id);
+                }
+              } else {
+                console.warn('Caller or receiver not found for call history');
+              }
+            } else {
+              console.warn('Chat session not found for call history:', chatSessionId);
             }
+          } catch (error) {
+            console.error('Error saving call history:', error);
           }
+        } else {
+          console.warn('Missing initiator or chatSessionId for call history:', { initiator, chatSessionId, duration });
         }
       } catch (error) {
         console.error('Error handling callEnded:', error);
