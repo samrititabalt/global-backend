@@ -311,7 +311,8 @@ const socketHandler = (io) => {
       socket.to(`chat_${data.chatSessionId}`).emit('offer', {
         offer: data.offer,
         from: socket.userId,
-        chatSessionId: data.chatSessionId
+        chatSessionId: data.chatSessionId,
+        isRenegotiation: data.isRenegotiation || false
       });
     });
 
