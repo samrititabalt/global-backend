@@ -63,6 +63,18 @@ const userSchema = new mongoose.Schema({
     ref: 'ChatSession'
   }],
   // Common fields
+  avatar: {
+    type: String, // Cloudinary URL
+    default: null
+  },
+  resetPasswordToken: {
+    type: String,
+    default: null
+  },
+  resetPasswordExpire: {
+    type: Date,
+    default: null
+  },
   isActive: {
     type: Boolean,
     default: true

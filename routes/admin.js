@@ -11,6 +11,7 @@ const Message = require('../models/Message');
 const { addTokens } = require('../services/tokenService');
 const generatePassword = require('../utils/generatePassword');
 const { sendCredentialsEmail } = require('../utils/sendEmail');
+const { upload, uploadToCloudinary } = require('../middleware/cloudinaryUpload');
 
 // ========== SERVICE MANAGEMENT ==========
 
@@ -179,7 +180,7 @@ router.delete('/plans/:id', protect, authorize('admin'), async (req, res) => {
 // @route   POST /api/admin/agents
 // @desc    Create a new agent
 // @access  Private (Admin)
-router.post('/agents', protect, authorize('admin'), [
+router.post('/agents', protect, authorize('admin'), upload.fields([{ name: 'avatar', maxCount: 1 }]), uploadToCloudinary, [
   body('name').trim().notEmpty().withMessage('Name is required'),
   body('email').isEmail().withMessage('Please provide a valid email'),
   body('phone').notEmpty().withMessage('Phone number is required'),
@@ -200,6 +201,15 @@ router.post('/agents', protect, authorize('admin'), [
       return res.status(400).json({ message: 'User already exists with this email' });
     }
 
+    // Get avatar URL if uploaded
+    let avatarUrl = null;
+    if (req.uploadedFiles && req.uploadedFiles.length > 0) {
+      const avatarFile = req.uploadedFiles.find(f => f.type === 'avatar');
+      if (avatarFile) {
+        avatarUrl = avatarFile.url;
+      }
+    }
+
     // Generate password
     const password = generatePassword();
 
@@ -211,7 +221,8 @@ router.post('/agents', protect, authorize('admin'), [
       country,
       password,
       role: 'agent',
-      serviceCategory
+      serviceCategory,
+      avatar: avatarUrl
     });
 
     // Send credentials email
@@ -223,7 +234,8 @@ router.post('/agents', protect, authorize('admin'), [
         _id: agent._id,
         name: agent.name,
         email: agent.email,
-        serviceCategory: agent.serviceCategory
+        serviceCategory: agent.serviceCategory,
+        avatar: agent.avatar
       }
     });
   } catch (error) {

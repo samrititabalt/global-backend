@@ -11,7 +11,7 @@ const storage = multer.memoryStorage();
 
 const fileFilter = (req, file, cb) => {
   // Accept images
-  if (file.fieldname === 'image') {
+  if (file.fieldname === 'image' || file.fieldname === 'avatar') {
     if (file.mimetype.startsWith('image/')) {
       cb(null, true);
     } else {
@@ -65,7 +65,7 @@ const uploadToCloudinary = async (req, res, next) => {
     // Upload images
     if (req.files.image && req.files.image.length > 0) {
       for (const file of req.files.image) {
-        const uploadPromise = uploadImage(file.buffer, `chat-media/images/${req.user._id}`, file.mimetype)
+        const uploadPromise = uploadImage(file.buffer, `chat-media/images/${req.user?._id || 'temp'}`, file.mimetype)
           .then(result => ({
             type: 'image',
             url: result.url,
@@ -78,6 +78,27 @@ const uploadToCloudinary = async (req, res, next) => {
           .catch(error => {
             console.error(`Error uploading image ${file.originalname}:`, error);
             throw new Error(`Failed to upload image: ${error.message}`);
+          });
+        uploadPromises.push(uploadPromise);
+      }
+    }
+
+    // Upload avatar
+    if (req.files.avatar && req.files.avatar.length > 0) {
+      for (const file of req.files.avatar) {
+        const uploadPromise = uploadImage(file.buffer, `avatars/${req.user?._id || 'temp'}`, file.mimetype)
+          .then(result => ({
+            type: 'avatar',
+            url: result.url,
+            publicId: result.publicId,
+            fileName: file.originalname,
+            size: result.bytes,
+            width: result.width,
+            height: result.height,
+          }))
+          .catch(error => {
+            console.error(`Error uploading avatar ${file.originalname}:`, error);
+            throw new Error(`Failed to upload avatar: ${error.message}`);
           });
         uploadPromises.push(uploadPromise);
       }
