@@ -2,10 +2,7 @@ const nodemailer = require('nodemailer');
 
 const buildTransportConfig = () => {
   const basePort = Number(process.env.EMAIL_PORT) || 587;
-  const secure =
-    typeof process.env.EMAIL_SECURE !== 'undefined'
-      ? process.env.EMAIL_SECURE === 'true'
-      : basePort === 465;
+  const secure = false;
 
   const commonAuth = {
     user: process.env.EMAIL_USER,
