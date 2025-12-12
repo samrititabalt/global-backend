@@ -96,7 +96,8 @@ router.get('/chat-sessions', protect, authorize('customer'), async (req, res) =>
   try {
     const chatSessions = await ChatSession.find({ customer: req.user._id })
       .populate('service', 'name')
-      .populate('agent', 'name email isOnline')
+      .populate('agent', 'name email isOnline avatar role')
+      .populate('customer', 'name email isOnline avatar role')
       .sort({ createdAt: -1 });
 
     // Add lastMessage to each chat session
@@ -138,8 +139,8 @@ router.get('/chat-session/:id', protect, authorize('customer'), async (req, res)
       customer: req.user._id
     })
       .populate('service', 'name')
-      .populate('agent', 'name email isOnline')
-      .populate('customer', 'name email isOnline');
+      .populate('agent', 'name email isOnline avatar role')
+      .populate('customer', 'name email isOnline avatar role');
 
     if (!chatSession) {
       return res.status(404).json({ message: 'Chat session not found' });
