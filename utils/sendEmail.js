@@ -55,12 +55,12 @@ const ensureTransportReady = async () => {
 const sendEmail = async (to, subject, html) => {
   if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
     console.error('Email credentials are not configured.');
-    return false;
+    throw new Error('Email credentials are missing');
   }
 
   const isReady = await ensureTransportReady();
   if (!isReady) {
-    return false;
+    throw new Error('Email transporter is not ready');
   }
 
   try {
@@ -73,10 +73,10 @@ const sendEmail = async (to, subject, html) => {
 
     const info = await transporter.sendMail(mailOptions);
     console.log('Email sent: ', info.messageId);
-    return true;
+    return info;
   } catch (error) {
-    console.error('Error sending email: ', error.message);
-    return false;
+    console.error('Error sending email: ', error);
+    throw error;
   }
 };
 

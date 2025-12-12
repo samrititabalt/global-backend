@@ -316,9 +316,10 @@ router.post('/forgot-password', [
       </html>
     `;
 
-    const emailSent = await sendEmail(email, 'Password Reset Request', html);
-
-    if (!emailSent) {
+    try {
+      await sendEmail(email, 'Password Reset Request', html);
+    } catch (emailError) {
+      console.error(`Password reset email failure for ${email} (${role}):`, emailError.message);
       user.resetPasswordToken = undefined;
       user.resetPasswordExpire = undefined;
       await user.save({ validateBeforeSave: false });
