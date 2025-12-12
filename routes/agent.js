@@ -43,7 +43,11 @@ router.get('/dashboard', protect, authorize('agent'), async (req, res) => {
       status: 'pending',
       agent: null
     })
-      .populate('customer', 'name email isOnline avatar role')
+      .populate({
+        path: 'customer',
+        select: 'name email isOnline avatar role phone country serviceCategory',
+        populate: { path: 'serviceCategory', select: 'name' }
+      })
       .populate('service', 'name')
       .sort({ createdAt: -1 });
 
@@ -52,7 +56,11 @@ router.get('/dashboard', protect, authorize('agent'), async (req, res) => {
       agent: agent._id,
       status: 'active'
     })
-      .populate('customer', 'name email isOnline avatar role')
+      .populate({
+        path: 'customer',
+        select: 'name email isOnline avatar role phone country serviceCategory',
+        populate: { path: 'serviceCategory', select: 'name' }
+      })
       .populate('service', 'name')
       .sort({ createdAt: -1 });
 
@@ -61,7 +69,11 @@ router.get('/dashboard', protect, authorize('agent'), async (req, res) => {
       agent: agent._id,
       status: 'completed'
     })
-      .populate('customer', 'name email isOnline avatar role')
+      .populate({
+        path: 'customer',
+        select: 'name email isOnline avatar role phone country serviceCategory',
+        populate: { path: 'serviceCategory', select: 'name' }
+      })
       .populate('service', 'name')
       .sort({ completedAt: -1 })
       .limit(10);
@@ -133,8 +145,16 @@ router.get('/chat-session/:id', protect, authorize('agent'), async (req, res) =>
       agent: req.user._id
     })
       .populate('service', 'name')
-      .populate('customer', 'name email isOnline avatar role')
-      .populate('agent', 'name email isOnline avatar role');
+      .populate({
+        path: 'customer',
+        select: 'name email isOnline avatar role phone country serviceCategory',
+        populate: { path: 'serviceCategory', select: 'name' }
+      })
+      .populate({
+        path: 'agent',
+        select: 'name email isOnline avatar role phone country serviceCategory',
+        populate: { path: 'serviceCategory', select: 'name' }
+      });
 
     if (!chatSession) {
       return res.status(404).json({ message: 'Chat session not found' });
