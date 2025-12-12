@@ -251,7 +251,8 @@ router.get('/services', protect, async (req, res) => {
 // @desc    Send password reset email
 // @access  Public
 router.post('/forgot-password', [
-  body('email').isEmail().withMessage('Please provide a valid email')
+  body('email').isEmail().withMessage('Please provide a valid email'),
+  body('role').isIn(['customer', 'agent', 'admin']).withMessage('Invalid user role')
 ], async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -259,14 +260,14 @@ router.post('/forgot-password', [
       return res.status(400).json({ errors: errors.array() });
     }
 
-    const { email } = req.body;
+    const { email, role } = req.body;
 
-    const user = await User.findOne({ email });
+    const user = await User.findOne({ email, role });
     if (!user) {
       // Don't reveal if user exists for security
-      return res.json({
-        success: true,
-        message: 'If an account exists with this email, a password reset link has been sent.'
+      return res.status(404).json({
+        success: false,
+        message: 'No account found for the provided email and role.'
       });
     }
 
