@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { body, validationResult } = require('express-validator');
 const User = require('../models/User');
+const Service = require('../models/Service');
 const generateToken = require('../utils/jwtToken');
 const { protect } = require('../middleware/auth');
 const { upload, uploadToCloudinary } = require('../middleware/cloudinaryUpload');
@@ -153,6 +154,95 @@ router.get('/me', protect, async (req, res) => {
     });
   } catch (error) {
     console.error('Get user error:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   PUT /api/auth/profile
+// @desc    Update current user's profile
+// @access  Private
+router.put(
+  '/profile',
+  protect,
+  upload.fields([{ name: 'avatar', maxCount: 1 }]),
+  uploadToCloudinary,
+  [
+    body('name').optional().trim().isLength({ min: 2 }).withMessage('Name must be at least 2 characters'),
+    body('phone').optional().trim().notEmpty().withMessage('Phone is required'),
+    body('country').optional().trim().notEmpty().withMessage('Country is required'),
+    body('serviceCategory').optional().isMongoId().withMessage('Invalid service'),
+    body('isAvailable').optional().isBoolean().withMessage('isAvailable must be boolean'),
+  ],
+  async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+      }
+
+      const updates = {};
+      const allowedFields = ['name', 'phone', 'country'];
+
+      allowedFields.forEach((field) => {
+        if (typeof req.body[field] !== 'undefined') {
+          updates[field] = req.body[field];
+        }
+      });
+
+      if (req.user.role === 'agent') {
+        if (typeof req.body.isAvailable !== 'undefined') {
+          updates.isAvailable = req.body.isAvailable === 'true' || req.body.isAvailable === true;
+        }
+        if (req.body.serviceCategory && req.body.serviceCategory !== 'null' && req.body.serviceCategory !== 'undefined') {
+          const serviceExists = await Service.findById(req.body.serviceCategory).select('_id');
+          if (!serviceExists) {
+            return res.status(404).json({ message: 'Service not found' });
+          }
+          updates.serviceCategory = req.body.serviceCategory;
+        }
+      }
+
+      if (req.uploadedFiles && req.uploadedFiles.length > 0) {
+        const avatarFile = req.uploadedFiles.find((file) => file.type === 'avatar');
+        if (avatarFile) {
+          updates.avatar = avatarFile.url;
+        }
+      }
+
+      if (Object.keys(updates).length === 0) {
+        return res.status(400).json({ message: 'No valid fields provided for update' });
+      }
+
+      const updatedUser = await User.findByIdAndUpdate(
+        req.user._id,
+        { $set: updates },
+        { new: true, runValidators: true }
+      )
+        .select('-password')
+        .populate('serviceCategory', 'name')
+        .populate('currentPlan', 'name price tokens');
+
+      res.json({
+        success: true,
+        user: updatedUser,
+        message: 'Profile updated successfully',
+      });
+    } catch (error) {
+      console.error('Update profile error:', error);
+      res.status(500).json({ message: 'Server error', error: error.message });
+    }
+  }
+);
+
+// @route   GET /api/auth/services
+// @desc    Get active services list (for profile dropdowns)
+// @access  Private
+router.get('/services', protect, async (req, res) => {
+  try {
+    const services = await Service.find({ isActive: true }).select('name _id');
+    res.json({ success: true, services });
+  } catch (error) {
+    console.error('Get services error:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 });
