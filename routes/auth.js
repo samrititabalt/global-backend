@@ -315,18 +315,19 @@ router.post('/forgot-password', [
       </html>
     `;
 
-    try {
-      await sendEmail(email, 'Password Reset Request', html);
-      res.json({
-        success: true,
-        message: 'Password reset email sent successfully'
-      });
-    } catch (error) {
+    const emailSent = await sendEmail(email, 'Password Reset Request', html);
+
+    if (!emailSent) {
       user.resetPasswordToken = undefined;
       user.resetPasswordExpire = undefined;
       await user.save({ validateBeforeSave: false });
-      return res.status(500).json({ message: 'Email could not be sent' });
+      return res.status(500).json({ message: 'Email could not be sent. Please try again later.' });
     }
+
+    res.json({
+      success: true,
+      message: 'Password reset email sent successfully'
+    });
   } catch (error) {
     console.error('Forgot password error:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
