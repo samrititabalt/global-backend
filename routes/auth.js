@@ -23,13 +23,36 @@ router.post('/register', upload.fields([{ name: 'avatar', maxCount: 1 }]), uploa
   body('country').trim().notEmpty().withMessage('Country is required')
 ], async (req, res) => {
   try {
+    // Log incoming request data for debugging
+    console.log('Registration request body:', req.body);
+    console.log('Registration request files:', req.files);
+    
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
+      const errorMessages = errors.array().map(e => e.msg);
+      console.log('Validation errors:', errorMessages);
+      console.log('Full validation errors:', errors.array());
+      return res.status(400).json({ 
+        message: errorMessages.join('. '),
+        errors: errors.array() 
+      });
     }
 
     const { name, email, phone, country } = req.body;
     console.log('Registration attempt:', { name, email, phone, country });
+    
+    // Validate that all required fields are present (double check)
+    if (!name || !email || !phone || !country) {
+      console.log('Missing fields detected:', { 
+        hasName: !!name, 
+        hasEmail: !!email, 
+        hasPhone: !!phone, 
+        hasCountry: !!country 
+      });
+      return res.status(400).json({ 
+        message: 'All fields are required: name, email, phone, and country' 
+      });
+    }
 
     // Check if user already exists
     const existingUser = await User.findOne({ email });
