@@ -9,14 +9,16 @@ const Message = require('../models/Message');
 const { checkTokenBalance } = require('../services/tokenService');
 const { assignAgent } = require('../services/agentAssignment');
 const { sendAIMessages } = require('../services/aiMessages');
+const { ensureDefaultPlans, formatPlanForResponse } = require('../utils/planDefaults');
 
 // @route   GET /api/customer/plans
 // @desc    Get all available plans
 // @access  Private (Customer)
 router.get('/plans', protect, authorize('customer'), async (req, res) => {
   try {
-    const plans = await Plan.find({ isActive: true });
-    res.json({ success: true, plans });
+    await ensureDefaultPlans();
+    const plans = await Plan.find({ isActive: true }).sort({ price: 1 });
+    res.json({ success: true, plans: plans.map(formatPlanForResponse) });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
   }

@@ -4,6 +4,7 @@ const cors = require('cors');
 const http = require('http');
 const socketIo = require('socket.io');
 require('dotenv').config();
+const { ensureDefaultPlans } = require('./utils/planDefaults');
 
 const app = express();
 const server = http.createServer(app);
@@ -44,7 +45,15 @@ mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/globalcar
   useNewUrlParser: true,
   useUnifiedTopology: true,
 })
-.then(() => console.log('MongoDB Connected ' + process.env.MONGODB_URI))
+.then(async () => {
+  console.log('MongoDB Connected ' + process.env.MONGODB_URI);
+  try {
+    await ensureDefaultPlans();
+    console.log('Default plans ready');
+  } catch (planError) {
+    console.error('Failed to seed default plans:', planError.message);
+  }
+})
 .catch(err => console.error('MongoDB Connection Error:', err));
 
 // Routes
@@ -52,6 +61,7 @@ app.use('/api/auth', require('./routes/auth'));
 app.use('/api/customer', require('./routes/customer'));
 app.use('/api/agent', require('./routes/agent'));
 app.use('/api/admin', require('./routes/admin'));
+app.use('/api/public', require('./routes/public'));
 app.use('/api/chat', require('./routes/chat'));
 app.use('/api/call', require('./routes/call'));
 app.use('/api/payment', require('./routes/payment'));
