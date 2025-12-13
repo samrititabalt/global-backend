@@ -76,6 +76,15 @@ const userSchema = new mongoose.Schema({
     type: String, // Cloudinary URL
     default: null
   },
+  resetPasswordOTP: {
+    type: String,
+    default: null
+  },
+  resetPasswordOTPExpire: {
+    type: Date,
+    default: null
+  },
+  // Keep old fields for backward compatibility (can be removed later)
   resetPasswordToken: {
     type: String,
     default: null

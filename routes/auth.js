@@ -7,7 +7,7 @@ const generateToken = require('../utils/jwtToken');
 const { protect } = require('../middleware/auth');
 const { upload, uploadToCloudinary } = require('../middleware/cloudinaryUpload');
 const crypto = require('crypto');
-const { sendEmail, sendPasswordResetEmail, sendCredentialsEmail } = require('../utils/sendEmail');
+const { sendEmail, sendCredentialsEmail } = require('../utils/sendEmail');
 const passport = require('passport');
 const GoogleStrategy = require('passport-google-oauth20').Strategy;
 const MicrosoftStrategy = require('passport-microsoft').Strategy;
@@ -258,7 +258,7 @@ router.get('/services', protect, async (req, res) => {
 });
 
 // @route   POST /api/auth/forgot-password
-// @desc    Send password reset email
+// @desc    Send password reset OTP code via email
 // @access  Public
 router.post('/forgot-password', [
   body('email').isEmail().withMessage('Please provide a valid email'),
@@ -281,28 +281,27 @@ router.post('/forgot-password', [
       });
     }
 
-    // Generate reset token
-    const resetToken = crypto.randomBytes(32).toString('hex');
-    user.resetPasswordToken = crypto.createHash('sha256').update(resetToken).digest('hex');
-    user.resetPasswordExpire = Date.now() + 10 * 60 * 1000; // 10 minutes
+    // Generate 6-digit OTP code
+    const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
+    
+    // Store OTP (hashed for security) and expiration (5 minutes)
+    user.resetPasswordOTP = crypto.createHash('sha256').update(otpCode).digest('hex');
+    user.resetPasswordOTPExpire = Date.now() + 5 * 60 * 1000; // 5 minutes
     await user.save({ validateBeforeSave: false });
 
-    // Create reset URL with role-specific path
-    const frontendUrl = process.env.FRONTEND_URL || 'https://mainproduct.vercel.app';
-    const resetUrl = `${frontendUrl}/${role}/reset-password/${resetToken}`;
-
-    // Send email using the new email service
+    // Send OTP email
     try {
-      console.log(`📧 Sending password reset email to ${email} (${role})...`);
-      await sendPasswordResetEmail(email, user.name, resetUrl);
-      console.log(`✅ Password reset email sent successfully to ${email}`);
+      console.log(`📧 Sending password reset OTP to ${email} (${role})...`);
+      const { sendPasswordResetOTPEmail } = require('../utils/sendEmail');
+      await sendPasswordResetOTPEmail(email, user.name, otpCode, role);
+      console.log(`✅ Password reset OTP sent successfully to ${email}`);
     } catch (emailError) {
-      console.error(`❌ Password reset email failure for ${email} (${role}):`, emailError.message);
+      console.error(`❌ Password reset OTP email failure for ${email} (${role}):`, emailError.message);
       if (process.env.NODE_ENV === 'development') {
         console.error('Full error:', emailError);
       }
-      user.resetPasswordToken = undefined;
-      user.resetPasswordExpire = undefined;
+      user.resetPasswordOTP = undefined;
+      user.resetPasswordOTPExpire = undefined;
       await user.save({ validateBeforeSave: false });
       return res.status(500).json({ 
         success: false,
@@ -313,7 +312,7 @@ router.post('/forgot-password', [
 
     res.json({
       success: true,
-      message: 'Password reset email sent successfully'
+      message: 'Password reset code sent to your email. Please check your inbox.'
     });
   } catch (error) {
     console.error('Forgot password error:', error);
@@ -321,10 +320,70 @@ router.post('/forgot-password', [
   }
 });
 
-// @route   POST /api/auth/reset-password/:token
-// @desc    Reset password with token
+// @route   POST /api/auth/verify-reset-otp
+// @desc    Verify OTP code and allow password reset
 // @access  Public
-router.post('/reset-password/:token', [
+router.post('/verify-reset-otp', [
+  body('email').isEmail().withMessage('Please provide a valid email'),
+  body('role').isIn(['customer', 'agent', 'admin']).withMessage('Invalid user role'),
+  body('otp').isLength({ min: 6, max: 6 }).withMessage('OTP must be 6 digits')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    const { email, role, otp } = req.body;
+
+    const user = await User.findOne({ email, role });
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    // Hash OTP to compare with stored hash
+    const hashedOTP = crypto.createHash('sha256').update(otp).digest('hex');
+
+    // Verify OTP
+    if (user.resetPasswordOTP !== hashedOTP) {
+      return res.status(400).json({ message: 'Invalid OTP code' });
+    }
+
+    // Check if OTP expired
+    if (!user.resetPasswordOTPExpire || user.resetPasswordOTPExpire < Date.now()) {
+      user.resetPasswordOTP = undefined;
+      user.resetPasswordOTPExpire = undefined;
+      await user.save({ validateBeforeSave: false });
+      return res.status(400).json({ message: 'OTP code has expired. Please request a new one.' });
+    }
+
+    // OTP is valid - generate a temporary session token for password reset
+    const resetSessionToken = crypto.randomBytes(32).toString('hex');
+    user.resetPasswordToken = crypto.createHash('sha256').update(resetSessionToken).digest('hex');
+    user.resetPasswordExpire = Date.now() + 10 * 60 * 1000; // 10 minutes to reset password
+    // Clear OTP after successful verification
+    user.resetPasswordOTP = undefined;
+    user.resetPasswordOTPExpire = undefined;
+    await user.save({ validateBeforeSave: false });
+
+    res.json({
+      success: true,
+      message: 'OTP verified successfully',
+      resetToken: resetSessionToken // Send token to frontend for password reset
+    });
+  } catch (error) {
+    console.error('Verify OTP error:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   POST /api/auth/reset-password
+// @desc    Reset password with verified session token
+// @access  Public
+router.post('/reset-password', [
+  body('email').isEmail().withMessage('Please provide a valid email'),
+  body('role').isIn(['customer', 'agent', 'admin']).withMessage('Invalid user role'),
+  body('resetToken').notEmpty().withMessage('Reset token is required'),
   body('password').isLength({ min: 6 }).withMessage('Password must be at least 6 characters')
 ], async (req, res) => {
   try {
@@ -333,19 +392,20 @@ router.post('/reset-password/:token', [
       return res.status(400).json({ errors: errors.array() });
     }
 
-    const { token } = req.params;
-    const { password } = req.body;
+    const { email, role, resetToken, password } = req.body;
 
     // Hash token to compare with stored hash
-    const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
+    const hashedToken = crypto.createHash('sha256').update(resetToken).digest('hex');
 
     const user = await User.findOne({
+      email,
+      role,
       resetPasswordToken: hashedToken,
       resetPasswordExpire: { $gt: Date.now() }
     });
 
     if (!user) {
-      return res.status(400).json({ message: 'Invalid or expired reset token' });
+      return res.status(400).json({ message: 'Invalid or expired reset session. Please verify OTP again.' });
     }
 
     // Set new password

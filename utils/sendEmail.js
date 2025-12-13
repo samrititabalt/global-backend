@@ -513,9 +513,192 @@ initializeEmail().catch(err => {
   console.error('⚠️ Email service will be initialized on first use');
 });
 
+/**
+ * Send password reset OTP code email
+ * @param {string} email - Recipient email
+ * @param {string} name - User name
+ * @param {string} otpCode - 6-digit OTP code
+ * @param {string} role - User role
+ */
+const sendPasswordResetOTPEmail = async (email, name, otpCode, role) => {
+  const loginUrl = process.env.FRONTEND_URL || 'https://mainproduct.vercel.app';
+  const roleLoginPath = role === 'customer' ? '/customer/login' : 
+                       role === 'agent' ? '/agent/login' : 
+                       '/admin/login';
+  const resetPath = role === 'customer' ? '/customer/reset-password' : 
+                   role === 'agent' ? '/agent/reset-password' : 
+                   '/admin/reset-password';
+
+  const html = `
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>Password Reset Code</title>
+      <style>
+        * {
+          margin: 0;
+          padding: 0;
+          box-sizing: border-box;
+        }
+        body {
+          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+          line-height: 1.6;
+          color: #333333;
+          background-color: #f4f4f4;
+        }
+        .email-container {
+          max-width: 600px;
+          margin: 0 auto;
+          background-color: #ffffff;
+        }
+        .header {
+          background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+          color: #ffffff;
+          padding: 40px 20px;
+          text-align: center;
+        }
+        .header h1 {
+          font-size: 28px;
+          font-weight: 600;
+        }
+        .content {
+          padding: 40px 30px;
+        }
+        .greeting {
+          font-size: 18px;
+          color: #333333;
+          margin-bottom: 20px;
+        }
+        .message {
+          font-size: 16px;
+          color: #666666;
+          margin-bottom: 30px;
+          line-height: 1.8;
+        }
+        .otp-box {
+          background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+          border-radius: 12px;
+          padding: 30px;
+          margin: 30px 0;
+          text-align: center;
+          border: 2px dashed #667eea;
+        }
+        .otp-code {
+          font-size: 48px;
+          font-weight: 700;
+          color: #667eea;
+          letter-spacing: 8px;
+          font-family: 'Courier New', monospace;
+          margin: 20px 0;
+          text-shadow: 2px 2px 4px rgba(0,0,0,0.1);
+        }
+        .otp-label {
+          font-size: 14px;
+          color: #666666;
+          text-transform: uppercase;
+          letter-spacing: 2px;
+          margin-bottom: 10px;
+        }
+        .button-container {
+          text-align: center;
+          margin: 35px 0;
+        }
+        .reset-button {
+          display: inline-block;
+          background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+          color: #ffffff;
+          text-decoration: none;
+          padding: 15px 40px;
+          border-radius: 6px;
+          font-weight: 600;
+          font-size: 16px;
+        }
+        .warning-box {
+          background-color: #fff3cd;
+          border-left: 4px solid #ffc107;
+          padding: 15px;
+          margin: 25px 0;
+          border-radius: 4px;
+        }
+        .warning-box p {
+          color: #856404;
+          font-size: 14px;
+          margin: 0;
+        }
+        .info-box {
+          background-color: #e7f3ff;
+          border-left: 4px solid #2196F3;
+          padding: 15px;
+          margin: 25px 0;
+          border-radius: 4px;
+        }
+        .info-box p {
+          color: #0d47a1;
+          font-size: 14px;
+          margin: 0;
+        }
+        .footer {
+          background-color: #f8f9fa;
+          padding: 30px;
+          text-align: center;
+          color: #666666;
+          font-size: 12px;
+        }
+      </style>
+    </head>
+    <body>
+      <div class="email-container">
+        <div class="header">
+          <h1>Password Reset Code</h1>
+        </div>
+        <div class="content">
+          <p class="greeting">Hello ${name},</p>
+          <p class="message">
+            We received a request to reset your password. Use the verification code below to proceed:
+          </p>
+          
+          <div class="otp-box">
+            <div class="otp-label">Your Verification Code</div>
+            <div class="otp-code">${otpCode}</div>
+            <p style="color: #666; font-size: 12px; margin-top: 10px;">This code expires in 5 minutes</p>
+          </div>
+
+          <div class="button-container">
+            <a href="${loginUrl}${resetPath}" class="reset-button">Enter Code to Reset Password</a>
+          </div>
+
+          <div class="info-box">
+            <p><strong>📝 Instructions:</strong></p>
+            <p style="margin-top: 8px;">1. Go to the password reset page</p>
+            <p>2. Enter your email and this verification code</p>
+            <p>3. Set your new password</p>
+          </div>
+
+          <div class="warning-box">
+            <p><strong>🔒 Security:</strong> Never share this code with anyone. If you didn't request this, please ignore this email and your password will remain unchanged.</p>
+          </div>
+        </div>
+        <div class="footer">
+          <p>&copy; ${new Date().getFullYear()} GlobalCare Support System. All rights reserved.</p>
+        </div>
+      </div>
+    </body>
+    </html>
+  `;
+
+  return await sendEmail(
+    email,
+    'Password Reset Verification Code - GlobalCare',
+    html
+  );
+};
+
 module.exports = {
   sendEmail,
   sendCredentialsEmail,
   sendPasswordResetEmail,
+  sendPasswordResetOTPEmail,
   initializeEmail,
 };
