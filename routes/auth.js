@@ -29,10 +29,12 @@ router.post('/register', upload.fields([{ name: 'avatar', maxCount: 1 }]), uploa
     }
 
     const { name, email, phone, country } = req.body;
+    console.log('Registration attempt:', { name, email, phone, country });
 
     // Check if user already exists
     const existingUser = await User.findOne({ email });
     if (existingUser) {
+      console.log('User already exists:', email);
       return res.status(400).json({ message: 'User already exists with this email' });
     }
 
@@ -46,29 +48,61 @@ router.post('/register', upload.fields([{ name: 'avatar', maxCount: 1 }]), uploa
     }
 
     // Generate password
-    const generatePassword = require('../utils/generatePassword');
+    console.log('Generating password...');
     const password = generatePassword();
+    if (!password || password.length < 6) {
+      console.error('Password generation failed or password too short');
+      return res.status(500).json({ 
+        message: 'Failed to generate password. Please try again.' 
+      });
+    }
+    console.log('Password generated successfully');
 
     // Create user
-    const user = await User.create({
-      name,
-      email,
-      phone,
-      country,
-      password,
-      role: 'customer',
-      avatar: avatarUrl
-    });
-
-    // Send credentials email
+    console.log('Creating user in database...');
+    let user;
     try {
-      console.log(`📧 Sending welcome email to ${email}...`);
-      await sendCredentialsEmail(email, password, 'customer', name);
-      console.log(`✅ Welcome email sent successfully to ${email}`);
-    } catch (emailError) {
-      console.error(`❌ Failed to send welcome email to ${email}:`, emailError.message);
-      // Don't fail registration if email fails, just log it
+      user = await User.create({
+        name,
+        email,
+        phone,
+        country,
+        password,
+        role: 'customer',
+        avatar: avatarUrl
+      });
+      console.log('User created successfully:', user._id);
+    } catch (dbError) {
+      console.error('Database error during user creation:', dbError);
+      console.error('Database error details:', {
+        name: dbError.name,
+        message: dbError.message,
+        code: dbError.code,
+        keyPattern: dbError.keyPattern,
+        keyValue: dbError.keyValue,
+        errors: dbError.errors
+      });
+      // If it's a duplicate key error, provide a clearer message
+      if (dbError.code === 11000) {
+        return res.status(400).json({ 
+          message: 'User already exists with this email',
+          error: 'Duplicate email'
+        });
+      }
+      throw dbError; // Re-throw to be caught by outer catch
     }
+
+    // Send credentials email (non-blocking - don't fail registration if email fails)
+    // Fire and forget - don't await to avoid blocking registration
+    sendCredentialsEmail(email, password, 'customer', name)
+      .then(() => {
+        console.log(`✅ Welcome email sent successfully to ${email}`);
+      })
+      .catch((emailError) => {
+        console.error(`❌ Failed to send welcome email to ${email}:`, emailError.message);
+        // Don't fail registration if email fails, just log it
+        // User is already created, so we continue
+      });
 
     const token = generateToken(user._id);
 
@@ -86,7 +120,34 @@ router.post('/register', upload.fields([{ name: 'avatar', maxCount: 1 }]), uploa
     });
   } catch (error) {
     console.error('Registration error:', error);
-    res.status(500).json({ message: 'Server error', error: error.message });
+    console.error('Error stack:', error.stack);
+    console.error('Error details:', {
+      name: error.name,
+      message: error.message,
+      code: error.code,
+      keyPattern: error.keyPattern,
+      keyValue: error.keyValue
+    });
+    
+    // Provide more specific error messages
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({ 
+        message: 'Validation error', 
+        errors: Object.values(error.errors).map(e => e.message)
+      });
+    }
+    
+    if (error.code === 11000) {
+      return res.status(400).json({ 
+        message: 'User already exists with this email',
+        error: 'Duplicate email'
+      });
+    }
+    
+    res.status(500).json({ 
+      message: 'Server error during registration', 
+      error: process.env.NODE_ENV === 'development' ? error.message : 'An error occurred. Please try again.'
+    });
   }
 });
 
