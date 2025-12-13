@@ -28,12 +28,23 @@ const userSchema = new mongoose.Schema({
   },
   oauthProvider: {
     type: String,
-    enum: ['google', 'microsoft', 'apple'],
-    default: null
+    default: null,
+    required: false,
+    validate: {
+      validator: function(value) {
+        // Allow null/undefined or valid enum values
+        if (value === null || value === undefined || value === '') {
+          return true; // Allow null/undefined/empty for regular signups
+        }
+        return ['google', 'microsoft', 'apple'].includes(value);
+      },
+      message: 'Invalid OAuth provider. Must be one of: google, microsoft, apple'
+    }
   },
   oauthId: {
     type: String,
-    default: null
+    default: null,
+    required: false
   },
   role: {
     type: String,
