@@ -33,22 +33,31 @@ const createTransporter = () => {
     console.warn('⚠️ Warning: App Password seems too short. Gmail App Passwords are typically 16 characters.');
   }
 
+  // Use explicit SMTP settings for better reliability on cloud platforms like Render
   const config = {
-    service: 'gmail', // Use Gmail service (handles SMTP automatically)
+    host: 'smtp.gmail.com',
+    port: 587,
+    secure: false, // true for 465, false for other ports
     auth: {
       user: emailUser.trim(),
       pass: emailPass,
     },
-    // Connection pool settings for better performance
-    pool: true,
-    maxConnections: 5,
-    maxMessages: 100,
-    rateDelta: 1000,
-    rateLimit: 5,
-    // Connection timeout
-    connectionTimeout: 10000, // 10 seconds
-    greetingTimeout: 10000,
-    socketTimeout: 10000,
+    // Increased timeouts for cloud platforms (Render, etc.)
+    connectionTimeout: 60000, // 60 seconds (increased from 10s)
+    greetingTimeout: 30000, // 30 seconds (increased from 10s)
+    socketTimeout: 60000, // 60 seconds (increased from 10s)
+    // Connection pool settings (disabled initially to avoid connection issues)
+    pool: false, // Disable pooling initially - can enable after successful connection
+    // TLS options for better compatibility
+    tls: {
+      rejectUnauthorized: false, // Allow self-signed certificates if needed
+      ciphers: 'SSLv3'
+    },
+    // Retry settings
+    retry: {
+      attempts: 3,
+      delay: 2000
+    }
   };
 
   return nodemailer.createTransport(config);
@@ -60,6 +69,7 @@ let isVerified = false;
 
 /**
  * Initialize and verify email transporter
+ * Non-blocking: Will attempt verification but won't fail if it times out (common on cloud platforms)
  */
 const initializeEmail = async () => {
   try {
@@ -67,12 +77,30 @@ const initializeEmail = async () => {
       transporter = createTransporter();
     }
 
-    // Verify connection
+    // Verify connection (with timeout handling for cloud platforms)
     if (!isVerified) {
-      await transporter.verify();
-      isVerified = true;
-      console.log('✅ Email service initialized and verified successfully');
-      console.log(`📧 Email configured for: ${process.env.EMAIL_USER}`);
+      try {
+        // Set a timeout for verification (30 seconds)
+        const verifyPromise = transporter.verify();
+        const timeoutPromise = new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Verification timeout')), 30000)
+        );
+        
+        await Promise.race([verifyPromise, timeoutPromise]);
+        isVerified = true;
+        console.log('✅ Email service initialized and verified successfully');
+        console.log(`📧 Email configured for: ${process.env.EMAIL_USER}`);
+      } catch (verifyError) {
+        // On cloud platforms, verification might timeout but sending can still work
+        if (verifyError.message.includes('timeout') || verifyError.message.includes('Connection timeout')) {
+          console.warn('⚠️ Email verification timed out (common on cloud platforms). Email sending will be attempted on first use.');
+          console.warn('⚠️ This is normal for Render/Heroku/etc. - emails will still be sent, verification is just skipped.');
+          // Don't mark as verified, but don't throw - allow sending to proceed
+          isVerified = false;
+        } else {
+          throw verifyError;
+        }
+      }
     }
 
     return true;
@@ -91,6 +119,13 @@ const initializeEmail = async () => {
       console.error('6. Make sure EMAIL_USER matches the Gmail account');
       console.error('\n📝 Current EMAIL_USER:', process.env.EMAIL_USER);
       console.error('📝 EMAIL_PASS length:', process.env.EMAIL_PASS ? process.env.EMAIL_PASS.replace(/\s+/g, '').length : 0, 'characters');
+      throw error; // Throw auth errors - these need to be fixed
+    }
+    
+    // For connection timeouts, don't throw - allow sending to be attempted
+    if (error.message.includes('timeout') || error.message.includes('Connection timeout') || error.code === 'ETIMEDOUT') {
+      console.warn('⚠️ Connection timeout during initialization. Email sending will be attempted on first use.');
+      return false; // Return false but don't throw
     }
     
     throw error;
@@ -106,9 +141,17 @@ const initializeEmail = async () => {
  * @returns {Promise} Email info
  */
 const sendEmail = async (to, subject, html, retries = 3) => {
-  // Ensure email service is initialized
-  if (!isVerified) {
-    await initializeEmail();
+  // Try to initialize if not verified, but don't fail if it times out
+  if (!transporter) {
+    try {
+      await initializeEmail();
+    } catch (initError) {
+      // If initialization fails due to timeout, continue anyway
+      if (!initError.message.includes('timeout') && !initError.message.includes('Connection timeout')) {
+        throw initError;
+      }
+      console.warn('⚠️ Email initialization timed out, but will attempt to send anyway...');
+    }
   }
 
   // Validate inputs
@@ -126,17 +169,24 @@ const sendEmail = async (to, subject, html, retries = 3) => {
     text: html.replace(/<[^>]*>/g, ''), // Strip HTML tags for text version
   };
 
-  // Retry logic
+  // Retry logic with increased timeouts
   let lastError;
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
-      // Ensure transporter is ready
-      if (!transporter || !isVerified) {
-        await initializeEmail();
+      // Ensure transporter exists (create new one if needed)
+      if (!transporter) {
+        transporter = createTransporter();
       }
 
-      const info = await transporter.sendMail(mailOptions);
+      // Send email with longer timeout
+      const sendPromise = transporter.sendMail(mailOptions);
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Send timeout')), 90000) // 90 second timeout
+      );
+      
+      const info = await Promise.race([sendPromise, timeoutPromise]);
       console.log(`✅ Email sent successfully to ${to} (Message ID: ${info.messageId})`);
+      isVerified = true; // Mark as verified after successful send
       return {
         success: true,
         messageId: info.messageId,
@@ -156,22 +206,23 @@ const sendEmail = async (to, subject, html, retries = 3) => {
         throw new Error(`Gmail authentication failed. Please check your EMAIL_USER and EMAIL_PASS in .env file. Make sure you're using a Gmail App Password (not your regular password). See GMAIL_SETUP_FIX.md for instructions.`);
       }
 
-      // If it's a connection error, try to reinitialize
-      if (error.code === 'ECONNECTION' || error.code === 'ETIMEDOUT' || error.code === 'EAUTH') {
-        console.log('🔄 Reinitializing email connection...');
+      // If it's a connection/timeout error, create a new transporter
+      if (error.code === 'ECONNECTION' || error.code === 'ETIMEDOUT' || error.message.includes('timeout') || error.message.includes('Connection timeout')) {
+        console.log(`🔄 Connection issue detected (attempt ${attempt}). Creating new transporter...`);
+        transporter = null; // Reset transporter
         isVerified = false;
-        transporter = null;
-        try {
-          await initializeEmail();
-        } catch (initError) {
-          // If reinitialization fails, throw the original error
-          throw lastError;
+        // Wait a bit longer before retry for connection issues
+        if (attempt < retries) {
+          const waitTime = Math.min(3000 * attempt, 10000); // 3s, 6s, 9s max
+          console.log(`⏳ Waiting ${waitTime/1000}s before retry...`);
+          await new Promise(resolve => setTimeout(resolve, waitTime));
         }
+        continue; // Continue to next attempt
       }
 
       // Wait before retry (exponential backoff)
       if (attempt < retries) {
-        const waitTime = Math.min(1000 * Math.pow(2, attempt - 1), 5000);
+        const waitTime = Math.min(2000 * Math.pow(2, attempt - 1), 10000);
         await new Promise(resolve => setTimeout(resolve, waitTime));
       }
     }
@@ -508,9 +559,14 @@ const sendPasswordResetEmail = async (email, name, resetUrl) => {
   );
 };
 
-// Initialize email service on module load
+// Initialize email service on module load (non-blocking)
+// On cloud platforms like Render, this might timeout, which is OK
 initializeEmail().catch(err => {
-  console.error('⚠️ Email service will be initialized on first use');
+  if (err.message.includes('timeout') || err.message.includes('Connection timeout')) {
+    console.log('ℹ️ Email service initialization timed out (normal on cloud platforms). Will initialize on first email send.');
+  } else {
+    console.error('⚠️ Email service will be initialized on first use:', err.message);
+  }
 });
 
 /**
