@@ -14,19 +14,30 @@ const nodemailer = require('nodemailer');
 // Create transporter with optimized configuration
 const createTransporter = () => {
   const emailUser = process.env.EMAIL_USER;
-  const emailPass = process.env.EMAIL_PASS;
+  let emailPass = process.env.EMAIL_PASS;
 
   if (!emailUser || !emailPass) {
     throw new Error('Email credentials (EMAIL_USER and EMAIL_PASS) are required in .env file');
   }
 
+  // Clean the password - remove all spaces and trim
+  emailPass = emailPass.trim().replace(/\s+/g, '');
+
+  // Validate email format
+  if (!emailUser.includes('@')) {
+    throw new Error('EMAIL_USER must be a valid email address');
+  }
+
+  // Validate password length (Gmail App Passwords are 16 characters)
+  if (emailPass.length < 16) {
+    console.warn('⚠️ Warning: App Password seems too short. Gmail App Passwords are typically 16 characters.');
+  }
+
   const config = {
-    host: process.env.EMAIL_HOST || 'smtp.gmail.com',
-    port: parseInt(process.env.EMAIL_PORT) || 587,
-    secure: false, // true for 465, false for other ports
+    service: 'gmail', // Use Gmail service (handles SMTP automatically)
     auth: {
-      user: emailUser,
-      pass: emailPass.replace(/\s+/g, ''), // Remove spaces from app password
+      user: emailUser.trim(),
+      pass: emailPass,
     },
     // Connection pool settings for better performance
     pool: true,
@@ -34,11 +45,6 @@ const createTransporter = () => {
     maxMessages: 100,
     rateDelta: 1000,
     rateLimit: 5,
-    // TLS options for better security
-    tls: {
-      rejectUnauthorized: false, // Allow self-signed certificates if needed
-      ciphers: 'SSLv3'
-    },
     // Connection timeout
     connectionTimeout: 10000, // 10 seconds
     greetingTimeout: 10000,
@@ -73,6 +79,20 @@ const initializeEmail = async () => {
   } catch (error) {
     console.error('❌ Email service initialization failed:', error.message);
     isVerified = false;
+    
+    // Provide helpful error messages
+    if (error.message.includes('Invalid login') || error.message.includes('535')) {
+      console.error('\n🔧 GMAIL AUTHENTICATION ERROR - Fix Steps:');
+      console.error('1. Make sure 2-Factor Authentication (2FA) is enabled on your Gmail account');
+      console.error('2. Generate a NEW App Password: https://myaccount.google.com/apppasswords');
+      console.error('3. Select "Mail" and "Other (Custom name)" - name it "GlobalCare"');
+      console.error('4. Copy the 16-character password (no spaces)');
+      console.error('5. Update EMAIL_PASS in your .env file');
+      console.error('6. Make sure EMAIL_USER matches the Gmail account');
+      console.error('\n📝 Current EMAIL_USER:', process.env.EMAIL_USER);
+      console.error('📝 EMAIL_PASS length:', process.env.EMAIL_PASS ? process.env.EMAIL_PASS.replace(/\s+/g, '').length : 0, 'characters');
+    }
+    
     throw error;
   }
 };
