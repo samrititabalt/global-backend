@@ -24,7 +24,16 @@ const userSchema = new mongoose.Schema({
   },
   password: {
     type: String,
-    required: true
+    required: false // We'll handle validation in routes for OAuth users
+  },
+  oauthProvider: {
+    type: String,
+    enum: ['google', 'microsoft', 'apple'],
+    default: null
+  },
+  oauthId: {
+    type: String,
+    default: null
   },
   role: {
     type: String,
@@ -86,10 +95,15 @@ const userSchema = new mongoose.Schema({
 });
 
 userSchema.pre('save', async function(next) {
-  if (!this.isModified('password')) {
+  // Skip password hashing if user is OAuth-only and password is not set
+  if (!this.isModified('password') || (this.oauthProvider && !this.password)) {
     return next();
   }
-  this.password = await bcrypt.hash(this.password, 10);
+  
+  // Only hash password if it exists
+  if (this.password) {
+    this.password = await bcrypt.hash(this.password, 10);
+  }
   next();
 });
 

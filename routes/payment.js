@@ -31,8 +31,8 @@ router.post('/create', protect, authorize('customer'), async (req, res) => {
         payment_method: 'paypal'
       },
       redirect_urls: {
-        return_url: `${process.env.FRONTEND_URL}/payment/success`,
-        cancel_url: `${process.env.FRONTEND_URL}/payment/cancel`
+        return_url: `${process.env.FRONTEND_URL || 'https://mainproduct.vercel.app'}/customer/payment/success`,
+        cancel_url: `${process.env.FRONTEND_URL || 'https://mainproduct.vercel.app'}/customer/payment/cancel?paymentId=${planId}`
       },
       transactions: [{
         item_list: {
@@ -133,6 +133,39 @@ router.post('/execute', protect, authorize('customer'), async (req, res) => {
   } catch (error) {
     console.error('Payment execution error:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   GET /api/payment/cancel
+// @desc    Handle payment cancellation
+// @access  Public (called by PayPal redirect)
+router.get('/cancel', async (req, res) => {
+  try {
+    const { paymentId, planId } = req.query;
+
+    if (paymentId) {
+      // Find and update transaction status
+      const transaction = await Transaction.findOne({ paymentId });
+      if (transaction) {
+        transaction.status = 'cancelled';
+        await transaction.save();
+
+        // Reset customer plan status if needed
+        await User.findByIdAndUpdate(transaction.customer, {
+          planStatus: 'none',
+          currentPlan: null
+        });
+      }
+    }
+
+    // Redirect to frontend cancellation page with info
+    const cancelUrl = `${process.env.FRONTEND_URL || 'https://mainproduct.vercel.app'}/customer/payment/cancel${planId ? `?planId=${planId}` : ''}`;
+    res.redirect(cancelUrl);
+  } catch (error) {
+    console.error('Payment cancellation error:', error);
+    // Still redirect to frontend even if backend error
+    const cancelUrl = `${process.env.FRONTEND_URL || 'https://mainproduct.vercel.app'}/customer/payment/cancel`;
+    res.redirect(cancelUrl);
   }
 });
 

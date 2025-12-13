@@ -8,6 +8,10 @@ const { protect } = require('../middleware/auth');
 const { upload, uploadToCloudinary } = require('../middleware/cloudinaryUpload');
 const crypto = require('crypto');
 const { sendEmail } = require('../utils/sendEmail');
+const passport = require('passport');
+const GoogleStrategy = require('passport-google-oauth20').Strategy;
+const MicrosoftStrategy = require('passport-microsoft').Strategy;
+const generatePassword = require('../utils/generatePassword');
 
 // @route   POST /api/auth/register
 // @desc    Register a new customer
@@ -377,6 +381,205 @@ router.post('/reset-password/:token', [
     console.error('Reset password error:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
   }
+});
+
+// ============================================================================
+// OAUTH CONFIGURATION
+// ============================================================================
+
+// Configure Google OAuth Strategy
+if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
+  passport.use(new GoogleStrategy({
+    clientID: process.env.GOOGLE_CLIENT_ID,
+    clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+    callbackURL: `${process.env.BACKEND_URL || 'http://localhost:5000'}/api/auth/google/callback`
+  },
+  async (accessToken, refreshToken, profile, done) => {
+    try {
+      let user = await User.findOne({ 
+        $or: [
+          { email: profile.emails[0].value },
+          { oauthId: profile.id, oauthProvider: 'google' }
+        ]
+      });
+
+      if (user) {
+        // Update OAuth info if not set
+        if (!user.oauthProvider) {
+          user.oauthProvider = 'google';
+          user.oauthId = profile.id;
+          if (profile.photos && profile.photos[0]) {
+            user.avatar = profile.photos[0].value;
+          }
+          await user.save();
+        }
+        return done(null, user);
+      } else {
+        // Create new user
+        const password = generatePassword();
+        user = new User({
+          name: profile.displayName || profile.name?.givenName || 'User',
+          email: profile.emails[0].value,
+          phone: 'N/A',
+          country: 'N/A',
+          password: password,
+          role: 'customer',
+          oauthProvider: 'google',
+          oauthId: profile.id,
+          avatar: profile.photos && profile.photos[0] ? profile.photos[0].value : null
+        });
+        await user.save();
+        return done(null, user);
+      }
+    } catch (error) {
+      return done(error, null);
+    }
+  }));
+}
+
+// Configure Microsoft OAuth Strategy
+if (process.env.MICROSOFT_CLIENT_ID && process.env.MICROSOFT_CLIENT_SECRET) {
+  passport.use(new MicrosoftStrategy({
+    clientID: process.env.MICROSOFT_CLIENT_ID,
+    clientSecret: process.env.MICROSOFT_CLIENT_SECRET,
+    callbackURL: `${process.env.BACKEND_URL || 'http://localhost:5000'}/api/auth/microsoft/callback`,
+    scope: ['user.read']
+  },
+  async (accessToken, refreshToken, profile, done) => {
+    try {
+      let user = await User.findOne({ 
+        $or: [
+          { email: profile.emails[0].value },
+          { oauthId: profile.id, oauthProvider: 'microsoft' }
+        ]
+      });
+
+      if (user) {
+        if (!user.oauthProvider) {
+          user.oauthProvider = 'microsoft';
+          user.oauthId = profile.id;
+          await user.save();
+        }
+        return done(null, user);
+      } else {
+        const password = generatePassword();
+        user = new User({
+          name: profile.displayName || profile.name?.givenName || 'User',
+          email: profile.emails[0].value,
+          phone: 'N/A',
+          country: 'N/A',
+          password: password,
+          role: 'customer',
+          oauthProvider: 'microsoft',
+          oauthId: profile.id
+        });
+        await user.save();
+        return done(null, user);
+      }
+    } catch (error) {
+      return done(error, null);
+    }
+  }));
+}
+
+// Serialize user for session
+passport.serializeUser((user, done) => {
+  done(null, user._id);
+});
+
+passport.deserializeUser(async (id, done) => {
+  try {
+    const user = await User.findById(id);
+    done(null, user);
+  } catch (error) {
+    done(error, null);
+  }
+});
+
+// ============================================================================
+// OAUTH ROUTES
+// ============================================================================
+
+// @route   GET /api/auth/google
+// @desc    Initiate Google OAuth
+// @access  Public
+router.get('/google', passport.authenticate('google', { scope: ['profile', 'email'] }));
+
+// @route   GET /api/auth/google/callback
+// @desc    Handle Google OAuth callback
+// @access  Public
+router.get('/google/callback',
+  passport.authenticate('google', { session: false, failureRedirect: `${process.env.FRONTEND_URL || 'https://mainproduct.vercel.app'}/customer/login?error=oauth_failed` }),
+  async (req, res) => {
+    try {
+      const user = req.user;
+      const token = generateToken(user._id);
+
+      // Update online status for agents
+      if (user.role === 'agent') {
+        user.isOnline = true;
+        await user.save();
+      }
+
+      // Redirect to frontend with token
+      const redirectUrl = `${process.env.FRONTEND_URL || 'https://mainproduct.vercel.app'}/customer/login?token=${token}&oauth=google`;
+      res.redirect(redirectUrl);
+    } catch (error) {
+      console.error('Google OAuth callback error:', error);
+      res.redirect(`${process.env.FRONTEND_URL || 'https://mainproduct.vercel.app'}/customer/login?error=oauth_failed`);
+    }
+  }
+);
+
+// @route   GET /api/auth/microsoft
+// @desc    Initiate Microsoft OAuth
+// @access  Public
+router.get('/microsoft', passport.authenticate('microsoft', { scope: ['user.read'] }));
+
+// @route   GET /api/auth/microsoft/callback
+// @desc    Handle Microsoft OAuth callback
+// @access  Public
+router.get('/microsoft/callback',
+  passport.authenticate('microsoft', { session: false, failureRedirect: `${process.env.FRONTEND_URL || 'https://mainproduct.vercel.app'}/customer/login?error=oauth_failed` }),
+  async (req, res) => {
+    try {
+      const user = req.user;
+      const token = generateToken(user._id);
+
+      if (user.role === 'agent') {
+        user.isOnline = true;
+        await user.save();
+      }
+
+      const redirectUrl = `${process.env.FRONTEND_URL || 'https://mainproduct.vercel.app'}/customer/login?token=${token}&oauth=microsoft`;
+      res.redirect(redirectUrl);
+    } catch (error) {
+      console.error('Microsoft OAuth callback error:', error);
+      res.redirect(`${process.env.FRONTEND_URL || 'https://mainproduct.vercel.app'}/customer/login?error=oauth_failed`);
+    }
+  }
+);
+
+// @route   GET /api/auth/apple
+// @desc    Initiate Apple OAuth (Note: Apple requires additional setup)
+// @access  Public
+router.get('/apple', (req, res) => {
+  // Apple OAuth requires more complex setup with JWT signing
+  // For now, return a message that it's not yet implemented
+  res.status(501).json({ 
+    message: 'Apple OAuth is not yet fully implemented. Please use Google or Microsoft for now.',
+    error: 'not_implemented'
+  });
+});
+
+// @route   GET /api/auth/apple/callback
+// @desc    Handle Apple OAuth callback
+// @access  Public
+router.get('/apple/callback', (req, res) => {
+  res.status(501).json({ 
+    message: 'Apple OAuth is not yet fully implemented.',
+    error: 'not_implemented'
+  });
 });
 
 module.exports = router;
