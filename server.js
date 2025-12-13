@@ -54,6 +54,13 @@ app.use(session({
 app.use(passport.initialize());
 app.use(passport.session());
 
+// Initialize Email Service
+const { initializeEmail } = require('./utils/sendEmail');
+initializeEmail().catch(err => {
+  console.warn('⚠️ Email service initialization warning:', err.message);
+  console.log('📧 Email will be initialized on first use');
+});
+
 // Database Connection
 mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/globalcare', {
   useNewUrlParser: true,

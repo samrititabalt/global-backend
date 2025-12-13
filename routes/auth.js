@@ -284,44 +284,10 @@ router.post('/forgot-password', [
     // Create reset URL
     const resetUrl = `${process.env.FRONTEND_URL || 'https://mainproduct.vercel.app'}/reset-password/${resetToken}`;
 
-    // Send email
-    const html = `
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <style>
-          body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
-          .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-          .header { background-color: #4CAF50; color: white; padding: 20px; text-align: center; }
-          .content { padding: 20px; background-color: #f9f9f9; }
-          .button { display: inline-block; padding: 12px 24px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 5px; margin: 20px 0; }
-          .footer { text-align: center; padding: 20px; color: #666; font-size: 12px; }
-        </style>
-      </head>
-      <body>
-        <div class="container">
-          <div class="header">
-            <h1>Password Reset Request</h1>
-          </div>
-          <div class="content">
-            <p>Hello ${user.name},</p>
-            <p>You requested to reset your password. Click the button below to reset it:</p>
-            <a href="${resetUrl}" class="button">Reset Password</a>
-            <p>Or copy and paste this link into your browser:</p>
-            <p style="word-break: break-all;">${resetUrl}</p>
-            <p>This link will expire in 10 minutes.</p>
-            <p>If you didn't request this, please ignore this email.</p>
-          </div>
-          <div class="footer">
-            <p>&copy; 2024 GlobalCare Support System. All rights reserved.</p>
-          </div>
-        </div>
-      </body>
-      </html>
-    `;
-
+    // Send email using the new email service
     try {
-      await sendEmail(email, 'Password Reset Request', html);
+      const { sendPasswordResetEmail } = require('../utils/sendEmail');
+      await sendPasswordResetEmail(email, user.name, resetUrl);
     } catch (emailError) {
       console.error(`Password reset email failure for ${email} (${role}):`, emailError.message);
       user.resetPasswordToken = undefined;
