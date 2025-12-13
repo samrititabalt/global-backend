@@ -130,6 +130,11 @@ const sendEmail = async (to, subject, html, retries = 3) => {
   let lastError;
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
+      // Ensure transporter is ready
+      if (!transporter || !isVerified) {
+        await initializeEmail();
+      }
+
       const info = await transporter.sendMail(mailOptions);
       console.log(`✅ Email sent successfully to ${to} (Message ID: ${info.messageId})`);
       return {
@@ -140,13 +145,28 @@ const sendEmail = async (to, subject, html, retries = 3) => {
     } catch (error) {
       lastError = error;
       console.error(`❌ Email send attempt ${attempt}/${retries} failed:`, error.message);
+      
+      // Log full error in development
+      if (process.env.NODE_ENV === 'development') {
+        console.error('Full error details:', error);
+      }
+
+      // If it's an authentication error, don't retry
+      if (error.message.includes('Invalid login') || error.message.includes('535')) {
+        throw new Error(`Gmail authentication failed. Please check your EMAIL_USER and EMAIL_PASS in .env file. Make sure you're using a Gmail App Password (not your regular password). See GMAIL_SETUP_FIX.md for instructions.`);
+      }
 
       // If it's a connection error, try to reinitialize
-      if (error.code === 'ECONNECTION' || error.code === 'ETIMEDOUT') {
+      if (error.code === 'ECONNECTION' || error.code === 'ETIMEDOUT' || error.code === 'EAUTH') {
         console.log('🔄 Reinitializing email connection...');
         isVerified = false;
         transporter = null;
-        await initializeEmail();
+        try {
+          await initializeEmail();
+        } catch (initError) {
+          // If reinitialization fails, throw the original error
+          throw lastError;
+        }
       }
 
       // Wait before retry (exponential backoff)

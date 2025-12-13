@@ -226,7 +226,14 @@ router.post('/agents', protect, authorize('admin'), upload.fields([{ name: 'avat
     });
 
     // Send credentials email
-    await sendCredentialsEmail(email, password, 'agent', name);
+    try {
+      console.log(`📧 Sending agent credentials email to ${email}...`);
+      await sendCredentialsEmail(email, password, 'agent', name);
+      console.log(`✅ Agent credentials email sent successfully to ${email}`);
+    } catch (emailError) {
+      console.error(`❌ Failed to send agent credentials email to ${email}:`, emailError.message);
+      // Don't fail agent creation if email fails, just log it
+    }
 
     res.status(201).json({
       success: true,

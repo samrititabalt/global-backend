@@ -7,7 +7,7 @@ const generateToken = require('../utils/jwtToken');
 const { protect } = require('../middleware/auth');
 const { upload, uploadToCloudinary } = require('../middleware/cloudinaryUpload');
 const crypto = require('crypto');
-const { sendEmail } = require('../utils/sendEmail');
+const { sendEmail, sendPasswordResetEmail, sendCredentialsEmail } = require('../utils/sendEmail');
 const passport = require('passport');
 const GoogleStrategy = require('passport-google-oauth20').Strategy;
 const MicrosoftStrategy = require('passport-microsoft').Strategy;
@@ -61,8 +61,14 @@ router.post('/register', upload.fields([{ name: 'avatar', maxCount: 1 }]), uploa
     });
 
     // Send credentials email
-    const { sendCredentialsEmail } = require('../utils/sendEmail');
-    await sendCredentialsEmail(email, password, 'customer', name);
+    try {
+      console.log(`📧 Sending welcome email to ${email}...`);
+      await sendCredentialsEmail(email, password, 'customer', name);
+      console.log(`✅ Welcome email sent successfully to ${email}`);
+    } catch (emailError) {
+      console.error(`❌ Failed to send welcome email to ${email}:`, emailError.message);
+      // Don't fail registration if email fails, just log it
+    }
 
     const token = generateToken(user._id);
 
@@ -281,19 +287,28 @@ router.post('/forgot-password', [
     user.resetPasswordExpire = Date.now() + 10 * 60 * 1000; // 10 minutes
     await user.save({ validateBeforeSave: false });
 
-    // Create reset URL
-    const resetUrl = `${process.env.FRONTEND_URL || 'https://mainproduct.vercel.app'}/reset-password/${resetToken}`;
+    // Create reset URL with role-specific path
+    const frontendUrl = process.env.FRONTEND_URL || 'https://mainproduct.vercel.app';
+    const resetUrl = `${frontendUrl}/${role}/reset-password/${resetToken}`;
 
     // Send email using the new email service
     try {
-      const { sendPasswordResetEmail } = require('../utils/sendEmail');
+      console.log(`📧 Sending password reset email to ${email} (${role})...`);
       await sendPasswordResetEmail(email, user.name, resetUrl);
+      console.log(`✅ Password reset email sent successfully to ${email}`);
     } catch (emailError) {
-      console.error(`Password reset email failure for ${email} (${role}):`, emailError.message);
+      console.error(`❌ Password reset email failure for ${email} (${role}):`, emailError.message);
+      if (process.env.NODE_ENV === 'development') {
+        console.error('Full error:', emailError);
+      }
       user.resetPasswordToken = undefined;
       user.resetPasswordExpire = undefined;
       await user.save({ validateBeforeSave: false });
-      return res.status(500).json({ message: 'Email could not be sent. Please try again later.' });
+      return res.status(500).json({ 
+        success: false,
+        message: 'Email could not be sent. Please check your email configuration and try again later.',
+        error: process.env.NODE_ENV === 'development' ? emailError.message : undefined
+      });
     }
 
     res.json({
