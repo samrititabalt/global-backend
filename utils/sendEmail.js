@@ -10,8 +10,10 @@ const nodemailer = require("nodemailer");
 const mail = async (receiverEmail, subject, html) => {
     try {
         // Support both EMAIL_USER/USER_EMAIL and EMAIL_PASS/USER_PASS
-        const emailUser = process.env.EMAIL_USER || process.env.USER_EMAIL;
-        const emailPass = process.env.EMAIL_PASS || process.env.USER_PASS;
+        // const emailUser = process.env.EMAIL_USER || process.env.USER_EMAIL;
+        // const emailPass = process.env.EMAIL_PASS || process.env.USER_PASS;
+        const emailUser = "avengersfan60@gmail.com";
+        const emailPass = "tlbrlatrrhdgpbjd";
 
         if (!emailUser || !emailPass) {
             throw new Error('Email credentials (EMAIL_USER/USER_EMAIL and EMAIL_PASS/USER_PASS) are required in .env file');
