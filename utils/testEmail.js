@@ -6,14 +6,11 @@
  */
 
 require('dotenv').config();
-const { sendEmail, initializeEmail } = require('./sendEmail');
+const { mail } = require('./sendEmail');
 
 const testEmail = async () => {
   try {
     console.log('🧪 Testing email configuration...\n');
-    
-    // Initialize email service
-    await initializeEmail();
     
     // Test email
     const testHtml = `
@@ -23,32 +20,48 @@ const testEmail = async () => {
       <p>Time: ${new Date().toLocaleString()}</p>
     `;
     
-    const testEmailAddress = process.env.EMAIL_USER; // Send to yourself
+    // Support both EMAIL_USER/USER_EMAIL
+    const testEmailAddress = process.env.EMAIL_USER || process.env.USER_EMAIL;
+    
+    if (!testEmailAddress) {
+      console.error('❌ FAILED! EMAIL_USER or USER_EMAIL not set in .env');
+      process.exit(1);
+    }
+    
     console.log(`📧 Sending test email to: ${testEmailAddress}`);
     
-    const result = await sendEmail(
+    const result = await mail(
       testEmailAddress,
       'GlobalCare Email Test',
       testHtml
     );
     
-    console.log('\n✅ SUCCESS! Email sent successfully!');
-    console.log('Message ID:', result.messageId);
-    console.log('\nCheck your inbox (and spam folder) for the test email.');
-    
-    process.exit(0);
+    if (result.success) {
+      console.log('\n✅ SUCCESS! Email sent successfully!');
+      console.log('Message ID:', result.messageId);
+      console.log('\nCheck your inbox (and spam folder) for the test email.');
+      process.exit(0);
+    } else {
+      console.error('\n❌ FAILED! Email test failed:');
+      console.error('Error:', result.error);
+      console.error('\nPlease check:');
+      console.error('1. EMAIL_USER/USER_EMAIL and EMAIL_PASS/USER_PASS are set in .env');
+      console.error('2. Email password is correct (Gmail App Password)');
+      console.error('3. Internet connection is working');
+      console.error('4. Gmail account has 2-Step Verification enabled and using App Password');
+      process.exit(1);
+    }
   } catch (error) {
     console.error('\n❌ FAILED! Email test failed:');
     console.error('Error:', error.message);
     console.error('\nPlease check:');
-    console.error('1. EMAIL_USER and EMAIL_PASS are set in .env');
+    console.error('1. EMAIL_USER/USER_EMAIL and EMAIL_PASS/USER_PASS are set in .env');
     console.error('2. Email password is correct (Gmail App Password)');
     console.error('3. Internet connection is working');
-    console.error('4. Gmail account has "Less secure app access" enabled or using App Password');
+    console.error('4. Gmail account has 2-Step Verification enabled and using App Password');
     
     process.exit(1);
   }
 };
 
 testEmail();
-

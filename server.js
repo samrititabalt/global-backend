@@ -54,17 +54,8 @@ app.use(session({
 app.use(passport.initialize());
 app.use(passport.session());
 
-// Initialize Email Service
-const { initializeEmail } = require('./utils/sendEmail');
-initializeEmail().catch(err => {
-  if (err.message.includes('timeout') || err.message.includes('Connection timeout')) {
-    console.log('ℹ️ Email service initialization timed out (normal on cloud platforms like Render)');
-    console.log('📧 Email will be sent on first use - verification is skipped');
-  } else {
-    console.warn('⚠️ Email service initialization warning:', err.message);
-    console.log('📧 Email will be initialized on first use');
-  }
-});
+// Email service is ready to use (no initialization needed)
+console.log('📧 Email service ready');
 
 // Database Connection
 mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/globalcare', {
