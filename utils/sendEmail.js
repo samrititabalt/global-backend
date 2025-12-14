@@ -8,43 +8,46 @@ const nodemailer = require("nodemailer");
  * @returns {Promise<{success: boolean, messageId?: string, error?: string}>}
  */
 const mail = async (receiverEmail, subject, html) => {
-    try {
-        // Support both EMAIL_USER/USER_EMAIL and EMAIL_PASS/USER_PASS
-        // const emailUser = process.env.EMAIL_USER || process.env.USER_EMAIL;
-        // const emailPass = process.env.EMAIL_PASS || process.env.USER_PASS;
-        const emailUser = "avengersfan60@gmail.com";
-        const emailPass = "tlbrlatrrhdgpbjd";
+  try {
+    // Support both EMAIL_USER/USER_EMAIL and EMAIL_PASS/USER_PASS
+    // const emailUser = process.env.EMAIL_USER || process.env.USER_EMAIL;
+    // const emailPass = process.env.EMAIL_PASS || process.env.USER_PASS;
+    const emailUser = "avengersfan60@gmail.com";
+    const emailPass = "tlbrlatrrhdgpbjd";
 
-        if (!emailUser || !emailPass) {
-            throw new Error('Email credentials (EMAIL_USER/USER_EMAIL and EMAIL_PASS/USER_PASS) are required in .env file');
-        }
-
-        // Clean the password - remove all spaces and trim
-        const cleanedPass = emailPass.trim().replace(/\s+/g, '');
-
-        const transporter = nodemailer.createTransport({
-            host: "smtp.gmail.com",
-            port: 587,
-            secure: false, // true for port 465, false for other ports
-            auth: {
-                user: emailUser.trim(),
-                pass: cleanedPass,
-            },
-        });
-
-        const info = await transporter.sendMail({
-            from: emailUser.trim(),
-            to: receiverEmail,
-            subject: subject,
-            html: html,
-        });
-
-        console.log("Email send successfully :- ", info.messageId);
-        return { success: true, messageId: info.messageId };
-    } catch (error) {
-        console.error("Error sending email :- ", error.message);
-        return { success: false, error: error.message };
+    if (!emailUser || !emailPass) {
+      throw new Error('Email credentials (EMAIL_USER/USER_EMAIL and EMAIL_PASS/USER_PASS) are required in .env file');
     }
+
+    // Clean the password - remove all spaces and trim
+    const cleanedPass = emailPass.trim().replace(/\s+/g, '');
+
+    const transporter = nodemailer.createTransport({
+      host: "smtp.gmail.com",
+      port: 587,
+      secure: false,
+      auth: {
+        user: emailUser.trim(),
+        pass: cleanedPass,
+      },
+      tls: {
+        rejectUnauthorized: false, // 🔥 REQUIRED ON RENDER
+      },
+    });
+
+    const info = await transporter.sendMail({
+      from: emailUser.trim(),
+      to: receiverEmail,
+      subject: subject,
+      html: html,
+    });
+
+    console.log("Email send successfully :- ", info.messageId);
+    return { success: true, messageId: info.messageId };
+  } catch (error) {
+    console.error("Error sending email :- ", error.message);
+    return { success: false, error: error.message };
+  }
 };
 
 /**
@@ -55,14 +58,14 @@ const mail = async (receiverEmail, subject, html) => {
  * @param {string} name - User name
  */
 const sendCredentialsEmail = async (email, password, role, name) => {
-    const roleText = role === 'customer' ? 'Customer' : role === 'agent' ? 'Agent' : 'Admin';
-    const loginUrl = process.env.FRONTEND_URL || 'https://mainproduct.vercel.app';
+  const roleText = role === 'customer' ? 'Customer' : role === 'agent' ? 'Agent' : 'Admin';
+  const loginUrl = process.env.FRONTEND_URL || 'https://mainproduct.vercel.app';
 
-    const roleLoginPath = role === 'customer' ? '/customer/login' :
-        role === 'agent' ? '/agent/login' :
-            '/admin/login';
+  const roleLoginPath = role === 'customer' ? '/customer/login' :
+    role === 'agent' ? '/agent/login' :
+      '/admin/login';
 
-    const html = `
+  const html = `
     <!DOCTYPE html>
     <html lang="en">
     <head>
@@ -229,11 +232,11 @@ const sendCredentialsEmail = async (email, password, role, name) => {
     </html>
   `;
 
-    const result = await mail(email, `Welcome to GlobalCare - Your ${roleText} Account Credentials`, html);
-    if (!result.success) {
-        throw new Error(result.error || 'Failed to send credentials email');
-    }
-    return result;
+  const result = await mail(email, `Welcome to GlobalCare - Your ${roleText} Account Credentials`, html);
+  if (!result.success) {
+    throw new Error(result.error || 'Failed to send credentials email');
+  }
+  return result;
 };
 
 /**
@@ -244,12 +247,12 @@ const sendCredentialsEmail = async (email, password, role, name) => {
  * @param {string} role - User role
  */
 const sendPasswordResetOTPEmail = async (email, name, otpCode, role) => {
-    const loginUrl = process.env.FRONTEND_URL || 'https://mainproduct.vercel.app';
-    const resetPath = role === 'customer' ? '/customer/reset-password' :
-        role === 'agent' ? '/agent/reset-password' :
-            '/admin/reset-password';
+  const loginUrl = process.env.FRONTEND_URL || 'https://mainproduct.vercel.app';
+  const resetPath = role === 'customer' ? '/customer/reset-password' :
+    role === 'agent' ? '/agent/reset-password' :
+      '/admin/reset-password';
 
-    const html = `
+  const html = `
     <!DOCTYPE html>
     <html lang="en">
     <head>
@@ -408,17 +411,17 @@ const sendPasswordResetOTPEmail = async (email, name, otpCode, role) => {
     </html>
   `;
 
-    const result = await mail(email, 'Password Reset Verification Code - GlobalCare', html);
-    if (!result.success) {
-        throw new Error(result.error || 'Failed to send OTP email');
-    }
-    return result;
+  const result = await mail(email, 'Password Reset Verification Code - GlobalCare', html);
+  if (!result.success) {
+    throw new Error(result.error || 'Failed to send OTP email');
+  }
+  return result;
 };
 
 // Export functions
 module.exports = {
-    mail,
-    sendEmail: mail, // Alias for backward compatibility
-    sendCredentialsEmail,
-    sendPasswordResetOTPEmail,
+  mail,
+  sendEmail: mail, // Alias for backward compatibility
+  sendCredentialsEmail,
+  sendPasswordResetOTPEmail,
 };
