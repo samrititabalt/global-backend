@@ -1,7 +1,7 @@
-const nodemailer = require("nodemailer");
+const brevo = require('@getbrevo/brevo');
 
 /**
- * Simple email sending function
+ * Simple email sending function using Brevo API
  * @param {string} receiverEmail - Recipient email address
  * @param {string} subject - Email subject
  * @param {string} html - Email HTML content
@@ -9,41 +9,36 @@ const nodemailer = require("nodemailer");
  */
 const mail = async (receiverEmail, subject, html) => {
   try {
-    // Support both EMAIL_USER/USER_EMAIL and EMAIL_PASS/USER_PASS
-    // const emailUser = process.env.EMAIL_USER || process.env.USER_EMAIL;
-    // const emailPass = process.env.EMAIL_PASS || process.env.USER_PASS;
-    const emailUser = "avengersfan60@gmail.com";
-    const emailPass = "tlbrlatrrhdgpbjd";
+    const brevoApiKey = process.env.BREVO_API_KEY;
 
-    if (!emailUser || !emailPass) {
-      throw new Error('Email credentials (EMAIL_USER/USER_EMAIL and EMAIL_PASS/USER_PASS) are required in .env file');
+    if (!brevoApiKey) {
+      throw new Error('BREVO_API_KEY is required in .env file');
     }
 
-    // Clean the password - remove all spaces and trim
-    const cleanedPass = emailPass.trim().replace(/\s+/g, '');
+    // Get sender email from environment or use default
+    const senderEmail = process.env.BREVO_SENDER_EMAIL || process.env.EMAIL_USER || process.env.USER_EMAIL;
+    const senderName = process.env.BREVO_SENDER_NAME || 'GlobalCare Support System';
 
-    const transporter = nodemailer.createTransport({
-      host: "smtp.gmail.com",
-      port: 465,
-      secure: true,
-      auth: {
-        user: emailUser.trim(),
-        pass: cleanedPass,
-      },
-      tls: {
-        rejectUnauthorized: false, // 🔥 REQUIRED ON RENDER
-      },
-    });
+    if (!senderEmail) {
+      throw new Error('BREVO_SENDER_EMAIL (or EMAIL_USER/USER_EMAIL) is required in .env file');
+    }
 
-    const info = await transporter.sendMail({
-      from: emailUser.trim(),
-      to: receiverEmail,
-      subject: subject,
-      html: html,
-    });
+    // Initialize Brevo API client
+    const apiInstance = new brevo.TransactionalEmailsApi();
+    apiInstance.setApiKey(brevo.TransactionalEmailsApiApiKeys.apiKey, brevoApiKey);
 
-    console.log("Email send successfully :- ", info.messageId);
-    return { success: true, messageId: info.messageId };
+    // Create email data
+    const sendSmtpEmail = new brevo.SendSmtpEmail();
+    sendSmtpEmail.subject = subject;
+    sendSmtpEmail.htmlContent = html;
+    sendSmtpEmail.sender = { name: senderName, email: senderEmail };
+    sendSmtpEmail.to = [{ email: receiverEmail }];
+
+    // Send email via Brevo API
+    const data = await apiInstance.sendTransacEmail(sendSmtpEmail);
+
+    console.log("Email send successfully :- ", data.messageId);
+    return { success: true, messageId: data.messageId };
   } catch (error) {
     console.error("Error sending email :- ", error.message);
     return { success: false, error: error.message };
@@ -425,5 +420,3 @@ module.exports = {
   sendCredentialsEmail,
   sendPasswordResetOTPEmail,
 };
-
-//hi there

@@ -1,6 +1,6 @@
 /**
  * Email Testing Script
- * Run this to test if email configuration is working
+ * Run this to test if Brevo email configuration is working
  * 
  * Usage: node utils/testEmail.js
  */
@@ -10,21 +10,26 @@ const { mail } = require('./sendEmail');
 
 const testEmail = async () => {
   try {
-    console.log('🧪 Testing email configuration...\n');
+    console.log('🧪 Testing Brevo email configuration...\n');
     
     // Test email
     const testHtml = `
       <h1>Email Test</h1>
       <p>This is a test email from GlobalCare Support System.</p>
-      <p>If you received this, your email configuration is working correctly! ✅</p>
+      <p>If you received this, your Brevo email configuration is working correctly! ✅</p>
       <p>Time: ${new Date().toLocaleString()}</p>
     `;
     
-    // Support both EMAIL_USER/USER_EMAIL
-    const testEmailAddress = process.env.EMAIL_USER || process.env.USER_EMAIL;
+    // Get test email address
+    const testEmailAddress = process.env.BREVO_SENDER_EMAIL || process.env.EMAIL_USER || process.env.USER_EMAIL;
     
     if (!testEmailAddress) {
-      console.error('❌ FAILED! EMAIL_USER or USER_EMAIL not set in .env');
+      console.error('❌ FAILED! BREVO_SENDER_EMAIL, EMAIL_USER, or USER_EMAIL not set in .env');
+      process.exit(1);
+    }
+    
+    if (!process.env.BREVO_API_KEY) {
+      console.error('❌ FAILED! BREVO_API_KEY not set in .env');
       process.exit(1);
     }
     
@@ -32,12 +37,12 @@ const testEmail = async () => {
     
     const result = await mail(
       testEmailAddress,
-      'GlobalCare Email Test',
+      'GlobalCare Email Test (Brevo)',
       testHtml
     );
     
     if (result.success) {
-      console.log('\n✅ SUCCESS! Email sent successfully!');
+      console.log('\n✅ SUCCESS! Email sent successfully via Brevo!');
       console.log('Message ID:', result.messageId);
       console.log('\nCheck your inbox (and spam folder) for the test email.');
       process.exit(0);
@@ -45,20 +50,18 @@ const testEmail = async () => {
       console.error('\n❌ FAILED! Email test failed:');
       console.error('Error:', result.error);
       console.error('\nPlease check:');
-      console.error('1. EMAIL_USER/USER_EMAIL and EMAIL_PASS/USER_PASS are set in .env');
-      console.error('2. Email password is correct (Gmail App Password)');
+      console.error('1. BREVO_API_KEY is set correctly in .env');
+      console.error('2. BREVO_SENDER_EMAIL is set and verified in Brevo dashboard');
       console.error('3. Internet connection is working');
-      console.error('4. Gmail account has 2-Step Verification enabled and using App Password');
       process.exit(1);
     }
   } catch (error) {
     console.error('\n❌ FAILED! Email test failed:');
     console.error('Error:', error.message);
     console.error('\nPlease check:');
-    console.error('1. EMAIL_USER/USER_EMAIL and EMAIL_PASS/USER_PASS are set in .env');
-    console.error('2. Email password is correct (Gmail App Password)');
+    console.error('1. BREVO_API_KEY is set correctly in .env');
+    console.error('2. BREVO_SENDER_EMAIL is set and verified in Brevo dashboard');
     console.error('3. Internet connection is working');
-    console.error('4. Gmail account has 2-Step Verification enabled and using App Password');
     
     process.exit(1);
   }
