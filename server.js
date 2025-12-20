@@ -83,6 +83,22 @@ app.use('/api/chat', require('./routes/chat'));
 app.use('/api/call', require('./routes/call'));
 app.use('/api/payment', require('./routes/payment'));
 
+// Redirect common OAuth routes that are missing /api prefix
+app.get('/auth/google', (req, res) => {
+  res.redirect(301, '/api/auth/google');
+});
+app.get('/auth/google/callback', (req, res) => {
+  const queryString = req.url.includes('?') ? req.url.substring(req.url.indexOf('?')) : '';
+  res.redirect(301, `/api/auth/google/callback${queryString}`);
+});
+app.get('/auth/microsoft', (req, res) => {
+  res.redirect(301, '/api/auth/microsoft');
+});
+app.get('/auth/microsoft/callback', (req, res) => {
+  const queryString = req.url.includes('?') ? req.url.substring(req.url.indexOf('?')) : '';
+  res.redirect(301, `/api/auth/microsoft/callback${queryString}`);
+});
+
 // Make io available to routes
 app.set('io', io);
 

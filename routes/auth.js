@@ -776,5 +776,30 @@ router.get('/microsoft/callback',
   }
 );
 
+// Catch-all route for OAuth to provide helpful error messages
+router.get('/:provider', (req, res) => {
+  const { provider } = req.params;
+  
+  if (provider === 'google' || provider === 'microsoft') {
+    return res.status(404).json({
+      message: `Cannot GET /api/auth/${provider}`,
+      error: 'route_not_found',
+      hint: `Make sure you're accessing the correct URL: /api/auth/${provider}`,
+      availableRoutes: [
+        'GET /api/auth/google',
+        'GET /api/auth/google/callback',
+        'GET /api/auth/microsoft',
+        'GET /api/auth/microsoft/callback',
+        'GET /api/auth/oauth-status'
+      ]
+    });
+  }
+  
+  res.status(404).json({
+    message: `Route not found: /api/auth/${provider}`,
+    error: 'route_not_found'
+  });
+});
+
 module.exports = router;
 
