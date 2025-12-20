@@ -514,7 +514,7 @@ router.post('/reset-password', [
 
 // Configure Google OAuth Strategy
 if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
-  passport.use(new GoogleStrategy({
+  passport.use('google', new GoogleStrategy({
     clientID: process.env.GOOGLE_CLIENT_ID,
     clientSecret: process.env.GOOGLE_CLIENT_SECRET,
     callbackURL: `${process.env.BACKEND_URL || 'http://localhost:5000'}/api/auth/google/callback`
@@ -560,11 +560,14 @@ if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
       return done(error, null);
     }
   }));
+  console.log('✅ Google OAuth strategy configured');
+} else {
+  console.log('⚠️  Google OAuth not configured (missing GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET)');
 }
 
 // Configure Microsoft OAuth Strategy
 if (process.env.MICROSOFT_CLIENT_ID && process.env.MICROSOFT_CLIENT_SECRET) {
-  passport.use(new MicrosoftStrategy({
+  passport.use('microsoft', new MicrosoftStrategy({
     clientID: process.env.MICROSOFT_CLIENT_ID,
     clientSecret: process.env.MICROSOFT_CLIENT_SECRET,
     callbackURL: `${process.env.BACKEND_URL || 'http://localhost:5000'}/api/auth/microsoft/callback`,
@@ -605,6 +608,9 @@ if (process.env.MICROSOFT_CLIENT_ID && process.env.MICROSOFT_CLIENT_SECRET) {
       return done(error, null);
     }
   }));
+  console.log('✅ Microsoft OAuth strategy configured');
+} else {
+  console.log('⚠️  Microsoft OAuth not configured (missing MICROSOFT_CLIENT_ID or MICROSOFT_CLIENT_SECRET)');
 }
 
 // Serialize user for session
@@ -625,16 +631,69 @@ passport.deserializeUser(async (id, done) => {
 // OAUTH ROUTES
 // ============================================================================
 
+// Helper function to check if a strategy is configured
+const isStrategyConfigured = (strategyName) => {
+  return passport._strategies && passport._strategies[strategyName];
+};
+
+// Test route to verify OAuth routes are accessible
+router.get('/oauth-status', (req, res) => {
+  res.json({
+    google: {
+      configured: !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET),
+      strategyRegistered: isStrategyConfigured('google'),
+      callbackURL: `${process.env.BACKEND_URL || 'http://localhost:5000'}/api/auth/google/callback`
+    },
+    microsoft: {
+      configured: !!(process.env.MICROSOFT_CLIENT_ID && process.env.MICROSOFT_CLIENT_SECRET),
+      strategyRegistered: isStrategyConfigured('microsoft'),
+      callbackURL: `${process.env.BACKEND_URL || 'http://localhost:5000'}/api/auth/microsoft/callback`
+    }
+  });
+});
+
 // @route   GET /api/auth/google
 // @desc    Initiate Google OAuth
 // @access  Public
-router.get('/google', passport.authenticate('google', { scope: ['profile', 'email'] }));
+router.get('/google', (req, res, next) => {
+  // Check if Google OAuth is configured
+  if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
+    return res.status(503).json({ 
+      message: 'Google OAuth is not configured. Please set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in environment variables.',
+      error: 'oauth_not_configured'
+    });
+  }
+  
+  // Check if strategy is registered
+  if (!isStrategyConfigured('google')) {
+    return res.status(503).json({ 
+      message: 'Google OAuth strategy is not initialized. Please check server configuration.',
+      error: 'oauth_strategy_not_initialized'
+    });
+  }
+  
+  // Proceed with authentication
+  passport.authenticate('google', { scope: ['profile', 'email'] })(req, res, next);
+});
 
 // @route   GET /api/auth/google/callback
 // @desc    Handle Google OAuth callback
 // @access  Public
 router.get('/google/callback',
-  passport.authenticate('google', { session: false, failureRedirect: `${process.env.FRONTEND_URL || 'https://mainproduct.vercel.app'}/customer/login?error=oauth_failed` }),
+  (req, res, next) => {
+    // Check if Google OAuth is configured
+    if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
+      return res.redirect(`${process.env.FRONTEND_URL || 'https://mainproduct.vercel.app'}/customer/login?error=oauth_not_configured`);
+    }
+    
+    // Check if strategy is registered
+    if (!isStrategyConfigured('google')) {
+      return res.redirect(`${process.env.FRONTEND_URL || 'https://mainproduct.vercel.app'}/customer/login?error=oauth_strategy_not_initialized`);
+    }
+    
+    // Proceed with authentication
+    passport.authenticate('google', { session: false, failureRedirect: `${process.env.FRONTEND_URL || 'https://mainproduct.vercel.app'}/customer/login?error=oauth_failed` })(req, res, next);
+  },
   async (req, res) => {
     try {
       const user = req.user;
@@ -659,13 +718,45 @@ router.get('/google/callback',
 // @route   GET /api/auth/microsoft
 // @desc    Initiate Microsoft OAuth
 // @access  Public
-router.get('/microsoft', passport.authenticate('microsoft', { scope: ['user.read'] }));
+router.get('/microsoft', (req, res, next) => {
+  // Check if Microsoft OAuth is configured
+  if (!process.env.MICROSOFT_CLIENT_ID || !process.env.MICROSOFT_CLIENT_SECRET) {
+    return res.status(503).json({ 
+      message: 'Microsoft OAuth is not configured. Please set MICROSOFT_CLIENT_ID and MICROSOFT_CLIENT_SECRET in environment variables.',
+      error: 'oauth_not_configured'
+    });
+  }
+  
+  // Check if strategy is registered
+  if (!isStrategyConfigured('microsoft')) {
+    return res.status(503).json({ 
+      message: 'Microsoft OAuth strategy is not initialized. Please check server configuration.',
+      error: 'oauth_strategy_not_initialized'
+    });
+  }
+  
+  // Proceed with authentication
+  passport.authenticate('microsoft', { scope: ['user.read'] })(req, res, next);
+});
 
 // @route   GET /api/auth/microsoft/callback
 // @desc    Handle Microsoft OAuth callback
 // @access  Public
 router.get('/microsoft/callback',
-  passport.authenticate('microsoft', { session: false, failureRedirect: `${process.env.FRONTEND_URL || 'https://mainproduct.vercel.app'}/customer/login?error=oauth_failed` }),
+  (req, res, next) => {
+    // Check if Microsoft OAuth is configured
+    if (!process.env.MICROSOFT_CLIENT_ID || !process.env.MICROSOFT_CLIENT_SECRET) {
+      return res.redirect(`${process.env.FRONTEND_URL || 'https://mainproduct.vercel.app'}/customer/login?error=oauth_not_configured`);
+    }
+    
+    // Check if strategy is registered
+    if (!isStrategyConfigured('microsoft')) {
+      return res.redirect(`${process.env.FRONTEND_URL || 'https://mainproduct.vercel.app'}/customer/login?error=oauth_strategy_not_initialized`);
+    }
+    
+    // Proceed with authentication
+    passport.authenticate('microsoft', { session: false, failureRedirect: `${process.env.FRONTEND_URL || 'https://mainproduct.vercel.app'}/customer/login?error=oauth_failed` })(req, res, next);
+  },
   async (req, res) => {
     try {
       const user = req.user;
@@ -684,28 +775,6 @@ router.get('/microsoft/callback',
     }
   }
 );
-
-// @route   GET /api/auth/apple
-// @desc    Initiate Apple OAuth (Note: Apple requires additional setup)
-// @access  Public
-router.get('/apple', (req, res) => {
-  // Apple OAuth requires more complex setup with JWT signing
-  // For now, return a message that it's not yet implemented
-  res.status(501).json({ 
-    message: 'Apple OAuth is not yet fully implemented. Please use Google or Microsoft for now.',
-    error: 'not_implemented'
-  });
-});
-
-// @route   GET /api/auth/apple/callback
-// @desc    Handle Apple OAuth callback
-// @access  Public
-router.get('/apple/callback', (req, res) => {
-  res.status(501).json({ 
-    message: 'Apple OAuth is not yet fully implemented.',
-    error: 'not_implemented'
-  });
-});
 
 module.exports = router;
 

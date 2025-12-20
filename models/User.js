@@ -36,9 +36,9 @@ const userSchema = new mongoose.Schema({
         if (value === null || value === undefined || value === '') {
           return true; // Allow null/undefined/empty for regular signups
         }
-        return ['google', 'microsoft', 'apple'].includes(value);
+        return ['google', 'microsoft'].includes(value);
       },
-      message: 'Invalid OAuth provider. Must be one of: google, microsoft, apple'
+      message: 'Invalid OAuth provider. Must be one of: google, microsoft'
     }
   },
   oauthId: {
