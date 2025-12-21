@@ -392,10 +392,10 @@ router.get('/customers', protect, authorize('admin'), async (req, res) => {
 });
 
 // @route   PUT /api/admin/customers/:id/tokens
-// @desc    Adjust customer tokens
+// @desc    Adjust customer tokens (can increase or decrease - use positive value to add, negative to subtract)
 // @access  Private (Admin)
 router.put('/customers/:id/tokens', protect, authorize('admin'), [
-  body('amount').isNumeric().withMessage('Amount must be a number'),
+  body('amount').isNumeric().withMessage('Amount must be a number (positive to add, negative to subtract)'),
   body('reason').trim().notEmpty().withMessage('Reason is required')
 ], async (req, res) => {
   try {
@@ -405,10 +405,16 @@ router.put('/customers/:id/tokens', protect, authorize('admin'), [
     }
 
     const { amount, reason } = req.body;
+    const amountNum = parseFloat(amount);
+
+    // Validate amount is not zero
+    if (amountNum === 0) {
+      return res.status(400).json({ message: 'Amount cannot be zero' });
+    }
 
     const result = await addTokens(
       req.params.id,
-      amount,
+      amountNum,
       reason,
       req.user._id
     );
@@ -417,7 +423,13 @@ router.put('/customers/:id/tokens', protect, authorize('admin'), [
       return res.status(400).json({ message: result.message });
     }
 
-    res.json({ success: true, balance: result.balance });
+    res.json({ 
+      success: true, 
+      balance: result.balance,
+      message: amountNum > 0 
+        ? `Successfully added ${amountNum} tokens. New balance: ${result.balance}`
+        : `Successfully deducted ${Math.abs(amountNum)} tokens. New balance: ${result.balance}`
+    });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
   }

@@ -5,6 +5,7 @@ const paypal = require('paypal-rest-sdk');
 const Transaction = require('../models/Transaction');
 const Plan = require('../models/Plan');
 const User = require('../models/User');
+const { addTokens } = require('../services/tokenService');
 
 // Configure PayPal
 paypal.configure({
@@ -109,24 +110,55 @@ router.post('/execute', protect, authorize('customer'), async (req, res) => {
           error: error.response 
         });
       } else {
-        // Update transaction
-        const transaction = await Transaction.findOneAndUpdate(
-          { paymentId: paymentId },
-          { 
-            status: 'pending', // Still pending until admin approval
-            paymentId: payment.id
-          },
-          { new: true }
-        );
+        // Find transaction with plan populated
+        const transaction = await Transaction.findOne({ paymentId: paymentId })
+          .populate('plan')
+          .populate('customer');
 
         if (!transaction) {
           return res.status(404).json({ message: 'Transaction not found' });
         }
 
+        // Check if transaction is already approved to prevent duplicate token addition
+        if (transaction.status === 'approved') {
+          return res.json({
+            success: true,
+            message: 'Payment already processed successfully!',
+            transaction
+          });
+        }
+
+        // Automatically approve transaction and add tokens
+        transaction.status = 'approved';
+        transaction.paymentId = payment.id;
+        transaction.approvedAt = new Date();
+        await transaction.save();
+
+        // Add tokens to customer automatically
+        const tokenResult = await addTokens(
+          transaction.customer._id,
+          transaction.tokens,
+          `Plan purchase: ${transaction.plan.name}`,
+          null, // No admin approval needed
+          transaction._id
+        );
+
+        if (!tokenResult.success) {
+          console.error('Error adding tokens:', tokenResult.message);
+          // Still mark transaction as approved, but log the error
+        }
+
+        // Update customer plan status to approved
+        await User.findByIdAndUpdate(transaction.customer._id, {
+          planStatus: 'approved',
+          currentPlan: transaction.plan._id
+        });
+
         res.json({
           success: true,
-          message: 'Payment successful! Our team will reach you shortly.',
-          transaction
+          message: 'Payment successful! Your plan has been activated and tokens have been added to your account.',
+          transaction,
+          tokenBalance: tokenResult.balance
         });
       }
     });
