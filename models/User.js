@@ -82,6 +82,11 @@ const userSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'ChatSession'
   }],
+  // Agent minutes tracking (total minutes worked/earned)
+  totalMinutesEarned: {
+    type: Number,
+    default: 0
+  },
   // Common fields
   avatar: {
     type: String, // Cloudinary URL

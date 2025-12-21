@@ -9,6 +9,10 @@ const { deductToken, checkTokenBalance } = require('../services/tokenService');
 const socketHandler = (io) => {
   // Store online users
   const onlineUsers = new Map();
+  
+  // Store active calls for per-minute tracking
+  // Structure: { chatSessionId: { customerId, agentId, startTime, connectedTime, intervalId } }
+  const activeCalls = new Map();
 
   io.on('connection', (socket) => {
     console.log('User connected:', socket.id);
@@ -333,10 +337,126 @@ const socketHandler = (io) => {
       });
     });
 
+    // Handle call started (when call is initiated)
+    socket.on('callStarted', async (data) => {
+      if (!socket.userId) return;
+      try {
+        const { chatSessionId } = data;
+        
+        const chatSession = await ChatSession.findById(chatSessionId).populate('customer agent');
+        if (!chatSession || !chatSession.customer || !chatSession.agent) return;
+        
+        // Check if both parties are online
+        const customer = await User.findById(chatSession.customer._id);
+        const agent = await User.findById(chatSession.agent._id);
+        
+        if (!customer.isOnline || !agent.isOnline) {
+          console.log('Call cannot start: one or both parties are offline');
+          return;
+        }
+        
+        // Initialize call tracking
+        activeCalls.set(chatSessionId, {
+          customerId: chatSession.customer._id.toString(),
+          agentId: chatSession.agent._id.toString(),
+          startTime: new Date(),
+          connectedTime: null,
+          intervalId: null
+        });
+        
+        console.log(`Call started for chat ${chatSessionId}`);
+      } catch (error) {
+        console.error('Error handling callStarted:', error);
+      }
+    });
+
+    // Handle call connected (when call is answered/connected)
+    socket.on('callConnected', async (data) => {
+      if (!socket.userId) return;
+      try {
+        const { chatSessionId } = data;
+        
+        const callData = activeCalls.get(chatSessionId);
+        if (!callData) {
+          console.log(`No active call found for chat ${chatSessionId}`);
+          return;
+        }
+        
+        // Mark as connected
+        callData.connectedTime = new Date();
+        activeCalls.set(chatSessionId, callData);
+        
+        // Start per-minute tracking
+        const intervalId = setInterval(async () => {
+          try {
+            const currentCallData = activeCalls.get(chatSessionId);
+            if (!currentCallData) {
+              clearInterval(intervalId);
+              return;
+            }
+            
+            // Verify both users are still online
+            const customer = await User.findById(currentCallData.customerId);
+            const agent = await User.findById(currentCallData.agentId);
+            
+            if (!customer || !agent || !customer.isOnline || !agent.isOnline) {
+              console.log(`Call tracking stopped: one or both parties went offline for chat ${chatSessionId}`);
+              clearInterval(intervalId);
+              activeCalls.delete(chatSessionId);
+              return;
+            }
+            
+            // Deduct 1 minute from customer balance
+            if (customer.tokenBalance > 0) {
+              customer.tokenBalance -= 1;
+              await customer.save();
+              
+              // Emit balance update to customer
+              io.to(`user_${customer._id}`).emit('tokenBalanceUpdate', { 
+                balance: customer.tokenBalance 
+              });
+            }
+            
+            // Track 1 minute for agent
+            agent.totalMinutesEarned = (agent.totalMinutesEarned || 0) + 1;
+            await agent.save();
+            
+            // Emit minute updates to both parties
+            io.to(`chat_${chatSessionId}`).emit('minuteTracked', {
+              customerBalance: customer.tokenBalance,
+              agentMinutesEarned: agent.totalMinutesEarned
+            });
+            
+            console.log(`Minute tracked for chat ${chatSessionId}: Customer balance=${customer.tokenBalance}, Agent earned=${agent.totalMinutesEarned}`);
+          } catch (error) {
+            console.error('Error in per-minute tracking:', error);
+            clearInterval(intervalId);
+            activeCalls.delete(chatSessionId);
+          }
+        }, 60000); // Every 60 seconds (1 minute)
+        
+        // Store interval ID for cleanup
+        callData.intervalId = intervalId;
+        activeCalls.set(chatSessionId, callData);
+        
+        console.log(`Call connected and per-minute tracking started for chat ${chatSessionId}`);
+      } catch (error) {
+        console.error('Error handling callConnected:', error);
+      }
+    });
+
     socket.on('callEnded', async (data) => {
       if (!socket.userId) return;
       try {
         const { chatSessionId, duration, initiator, currentUser } = data;
+        
+        // Stop per-minute tracking immediately
+        const callData = activeCalls.get(chatSessionId);
+        if (callData && callData.intervalId) {
+          clearInterval(callData.intervalId);
+          activeCalls.delete(chatSessionId);
+          console.log(`Per-minute tracking stopped for chat ${chatSessionId}`);
+        }
         
         // Emit to other party
         socket.to(`chat_${chatSessionId}`).emit('callEnded', {
@@ -465,6 +585,23 @@ const socketHandler = (io) => {
           if (user) {
               user.isOnline = false;
               await user.save();
+            
+            // Stop all active calls for this user immediately
+            for (const [chatSessionId, callData] of activeCalls.entries()) {
+              if (callData.customerId === socket.userId.toString() || callData.agentId === socket.userId.toString()) {
+                if (callData.intervalId) {
+                  clearInterval(callData.intervalId);
+                }
+                activeCalls.delete(chatSessionId);
+                console.log(`Stopped call tracking for chat ${chatSessionId} due to user disconnect`);
+                
+                // Notify other party
+                io.to(`chat_${chatSessionId}`).emit('callEnded', {
+                  from: socket.userId,
+                  reason: 'disconnected'
+                });
+              }
+            }
             
             // Notify that user is offline
             if (user.role === 'agent') {
