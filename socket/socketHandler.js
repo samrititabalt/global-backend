@@ -214,6 +214,12 @@ const socketHandler = (io) => {
           }
         }
 
+        // Increment agent minutes for agent messages
+        if (sender.role === 'agent') {
+          const { incrementAgentMinutesForMessage } = require('../services/agentMinutesService');
+          await incrementAgentMinutesForMessage(senderId);
+        }
+
         // Update chat session status
         if (chatSession.status === 'pending') {
           chatSession.status = 'active';

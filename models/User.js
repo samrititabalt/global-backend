@@ -87,6 +87,11 @@ const userSchema = new mongoose.Schema({
     type: Number,
     default: 0
   },
+  // Agent current minutes balance (can be adjusted by admin)
+  agentMinutes: {
+    type: Number,
+    default: 0
+  },
   // Common fields
   avatar: {
     type: String, // Cloudinary URL

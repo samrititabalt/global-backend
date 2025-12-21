@@ -287,6 +287,52 @@ router.put('/agents/:id', protect, authorize('admin'), async (req, res) => {
   }
 });
 
+// @route   PUT /api/admin/agents/:id/minutes
+// @desc    Adjust agent minutes (can increase or decrease - use positive value to add, negative to subtract)
+// @access  Private (Admin)
+router.put('/agents/:id/minutes', protect, authorize('admin'), [
+  body('amount').isNumeric().withMessage('Amount must be a number (positive to add, negative to subtract)'),
+  body('reason').trim().notEmpty().withMessage('Reason is required')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    const { amount, reason } = req.body;
+    const amountNum = parseFloat(amount);
+
+    // Validate amount is not zero
+    if (amountNum === 0) {
+      return res.status(400).json({ message: 'Amount cannot be zero' });
+    }
+
+    const { addAgentMinutes } = require('../services/agentMinutesService');
+    const result = await addAgentMinutes(
+      req.params.id,
+      amountNum,
+      reason,
+      req.user._id
+    );
+
+    if (!result.success) {
+      return res.status(400).json({ message: result.message });
+    }
+
+    res.json({ 
+      success: true, 
+      minutes: result.minutes,
+      totalEarned: result.totalEarned,
+      message: amountNum > 0 
+        ? `Successfully added ${amountNum} minutes. New balance: ${result.minutes}`
+        : `Successfully deducted ${Math.abs(amountNum)} minutes. New balance: ${result.minutes}`
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
 // ========== TRANSACTION MANAGEMENT ==========
 
 // @route   GET /api/admin/transactions
