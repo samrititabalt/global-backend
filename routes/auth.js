@@ -175,11 +175,12 @@ router.post('/register', upload.fields([{ name: 'avatar', maxCount: 1 }]), uploa
 });
 
 // @route   POST /api/auth/login
-// @desc    Login user
+// @desc    Login user with role-based portal restriction
 // @access  Public
 router.post('/login', [
   body('email').isEmail().withMessage('Please provide a valid email'),
-  body('password').notEmpty().withMessage('Password is required')
+  body('password').notEmpty().withMessage('Password is required'),
+  body('expectedRole').optional().isIn(['customer', 'agent', 'admin']).withMessage('Invalid expected role')
 ], async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -187,7 +188,7 @@ router.post('/login', [
       return res.status(400).json({ errors: errors.array() });
     }
 
-    const { email, password } = req.body;
+    const { email, password, expectedRole } = req.body;
 
     const user = await User.findOne({ email });
     if (!user) {
@@ -196,6 +197,14 @@ router.post('/login', [
 
     if (!user.isActive) {
       return res.status(401).json({ message: 'Account is deactivated' });
+    }
+
+    // STRICT ROLE-BASED LOGIN RESTRICTION
+    // If expectedRole is provided, user's role MUST match
+    if (expectedRole && user.role !== expectedRole) {
+      return res.status(403).json({ 
+        message: `Access denied. ${user.role === 'customer' ? 'Customer' : user.role === 'agent' ? 'Agent' : 'Admin'} accounts can only login through the ${user.role} portal.` 
+      });
     }
 
     const isMatch = await user.comparePassword(password);
