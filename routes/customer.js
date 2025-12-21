@@ -165,9 +165,9 @@ router.get('/chat-session/:id', protect, authorize('customer'), async (req, res)
     }
 
     const messages = await Message.find({ chatSession: chatSession._id })
-      .populate('sender', 'name email')
+      .populate('sender', 'name email avatar role')
       .populate('replyTo', 'content messageType attachments fileUrl fileName sender')
-      .populate('replyTo.sender', 'name')
+      .populate('replyTo.sender', 'name avatar')
       .sort({ createdAt: 1 });
 
     res.json({

@@ -228,9 +228,9 @@ const socketHandler = (io) => {
 
         // Populate message
         const populatedMessage = await Message.findById(message._id)
-          .populate('sender', 'name email')
+          .populate('sender', 'name email avatar role')
           .populate('replyTo', 'content messageType attachments fileUrl fileName sender')
-          .populate('replyTo.sender', 'name');
+          .populate('replyTo.sender', 'name avatar');
 
         // Convert to plain object for socket emission
         const messageData = {
@@ -518,7 +518,7 @@ const socketHandler = (io) => {
                   });
 
                   // Populate and emit to chat
-                  await callMessage.populate('sender', 'name email');
+                  await callMessage.populate('sender', 'name email avatar role');
                   io.to(`chat_${chatSessionId}`).emit('newMessage', callMessage);
                   console.log('Call message created and emitted:', callMessage._id);
                 }

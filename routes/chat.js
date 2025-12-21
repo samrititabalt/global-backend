@@ -68,9 +68,9 @@ router.post('/message', protect, upload.none(), async (req, res) => {
     }
 
     const populatedMessage = await Message.findById(message._id)
-      .populate('sender', 'name email')
+      .populate('sender', 'name email avatar role')
       .populate('replyTo', 'content messageType attachments fileUrl fileName sender')
-      .populate('replyTo.sender', 'name');
+      .populate('replyTo.sender', 'name avatar');
 
     res.json({ success: true, message: populatedMessage });
   } catch (error) {
@@ -166,9 +166,9 @@ router.post('/upload', protect, upload.fields([
     }
 
     const populatedMessage = await Message.findById(message._id)
-      .populate('sender', 'name email')
+      .populate('sender', 'name email avatar role')
       .populate('replyTo', 'content messageType attachments fileUrl fileName sender')
-      .populate('replyTo.sender', 'name');
+      .populate('replyTo.sender', 'name avatar');
 
     // Emit to socket for real-time update
     const io = req.app.get('io');
@@ -203,9 +203,9 @@ router.get('/sessions/:id/messages', protect, async (req, res) => {
     }
 
     const messages = await Message.find({ chatSession: req.params.id })
-      .populate('sender', 'name email')
+      .populate('sender', 'name email avatar role')
       .populate('replyTo', 'content messageType attachments fileUrl fileName sender')
-      .populate('replyTo.sender', 'name')
+      .populate('replyTo.sender', 'name avatar')
       .sort({ createdAt: 1 });
 
     res.json({ success: true, messages });
@@ -296,7 +296,7 @@ router.put('/message/:id', protect, async (req, res) => {
     await message.save();
 
     const populatedMessage = await Message.findById(message._id)
-      .populate('sender', 'name email');
+      .populate('sender', 'name email avatar role');
 
     // Emit to socket for real-time update
     const io = req.app.get('io');
@@ -358,7 +358,7 @@ router.delete('/message/:id', protect, async (req, res) => {
     await message.save();
 
     const populatedMessage = await Message.findById(message._id)
-      .populate('sender', 'name email');
+      .populate('sender', 'name email avatar role');
 
     // Emit to socket for real-time update
     const io = req.app.get('io');
