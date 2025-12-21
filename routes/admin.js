@@ -8,6 +8,7 @@ const Plan = require('../models/Plan');
 const Transaction = require('../models/Transaction');
 const ChatSession = require('../models/ChatSession');
 const Message = require('../models/Message');
+const Timesheet = require('../models/Timesheet');
 const { addTokens } = require('../services/tokenService');
 const generatePassword = require('../utils/generatePassword');
 const { sendCredentialsEmail } = require('../utils/sendEmail');
@@ -717,6 +718,174 @@ router.get('/dashboard', protect, authorize('admin'), async (req, res) => {
         recentTransactions
       }
     });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// ========== TIMESHEET MANAGEMENT ==========
+
+// @route   GET /api/admin/timesheets
+// @desc    Get all timesheets
+// @access  Private (Admin)
+router.get('/timesheets', protect, authorize('admin'), async (req, res) => {
+  try {
+    const timesheets = await Timesheet.find()
+      .populate('agentId', 'name email')
+      .sort({ weekStart: -1, createdAt: -1 });
+
+    res.json({ success: true, timesheets });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   POST /api/admin/timesheets
+// @desc    Create a new timesheet entry
+// @access  Private (Admin)
+router.post('/timesheets', protect, authorize('admin'), [
+  body('agentId').notEmpty().withMessage('Agent ID is required'),
+  body('weekStart').notEmpty().withMessage('Week start date is required'),
+  body('hoursWorked').isFloat({ min: 0 }).withMessage('Hours worked must be a positive number'),
+  body('hourlyRate').isFloat({ min: 0 }).withMessage('Hourly rate must be a positive number')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    const {
+      agentId,
+      weekStart,
+      weekEnd,
+      weekNumber,
+      dateRange,
+      hoursWorked,
+      hourlyRate,
+      approvalStatus,
+      conditionalComment,
+      paidToBank
+    } = req.body;
+
+    // Check if agent exists
+    const agent = await User.findById(agentId);
+    if (!agent || agent.role !== 'agent') {
+      return res.status(404).json({ message: 'Agent not found' });
+    }
+
+    // Calculate total amount
+    const totalAmount = (parseFloat(hoursWorked) || 0) * (parseFloat(hourlyRate) || 0);
+
+    // Check for duplicate entry
+    const existing = await Timesheet.findOne({
+      agentId,
+      weekStart: new Date(weekStart)
+    });
+
+    if (existing) {
+      return res.status(400).json({ message: 'Timesheet entry already exists for this agent and week' });
+    }
+
+    const timesheet = await Timesheet.create({
+      agentId,
+      weekStart: new Date(weekStart),
+      weekEnd: new Date(weekEnd),
+      weekNumber,
+      dateRange,
+      hoursWorked: parseFloat(hoursWorked) || 0,
+      hourlyRate: parseFloat(hourlyRate) || 0,
+      totalAmount,
+      approvalStatus: approvalStatus || 'Not Approved',
+      conditionalComment: conditionalComment || '',
+      paidToBank: paidToBank || 'No'
+    });
+
+    const populatedTimesheet = await Timesheet.findById(timesheet._id)
+      .populate('agentId', 'name email');
+
+    res.status(201).json({ success: true, timesheet: populatedTimesheet });
+  } catch (error) {
+    if (error.code === 11000) {
+      return res.status(400).json({ message: 'Timesheet entry already exists for this agent and week' });
+    }
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   PUT /api/admin/timesheets/:id
+// @desc    Update a timesheet entry
+// @access  Private (Admin)
+router.put('/timesheets/:id', protect, authorize('admin'), [
+  body('hoursWorked').optional().isFloat({ min: 0 }).withMessage('Hours worked must be a positive number'),
+  body('hourlyRate').optional().isFloat({ min: 0 }).withMessage('Hourly rate must be a positive number')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    const {
+      agentId,
+      weekStart,
+      weekEnd,
+      weekNumber,
+      dateRange,
+      hoursWorked,
+      hourlyRate,
+      approvalStatus,
+      conditionalComment,
+      paidToBank
+    } = req.body;
+
+    const timesheet = await Timesheet.findById(req.params.id);
+    if (!timesheet) {
+      return res.status(404).json({ message: 'Timesheet entry not found' });
+    }
+
+    // Calculate total amount if hours or rate changed
+    let totalAmount = timesheet.totalAmount;
+    const finalHours = hoursWorked !== undefined ? parseFloat(hoursWorked) : timesheet.hoursWorked;
+    const finalRate = hourlyRate !== undefined ? parseFloat(hourlyRate) : timesheet.hourlyRate;
+    totalAmount = finalHours * finalRate;
+
+    // Update fields
+    if (agentId) timesheet.agentId = agentId;
+    if (weekStart) timesheet.weekStart = new Date(weekStart);
+    if (weekEnd) timesheet.weekEnd = new Date(weekEnd);
+    if (weekNumber) timesheet.weekNumber = weekNumber;
+    if (dateRange) timesheet.dateRange = dateRange;
+    if (hoursWorked !== undefined) timesheet.hoursWorked = parseFloat(hoursWorked) || 0;
+    if (hourlyRate !== undefined) timesheet.hourlyRate = parseFloat(hourlyRate) || 0;
+    timesheet.totalAmount = totalAmount;
+    if (approvalStatus) timesheet.approvalStatus = approvalStatus;
+    if (conditionalComment !== undefined) timesheet.conditionalComment = conditionalComment || '';
+    if (paidToBank) timesheet.paidToBank = paidToBank;
+
+    await timesheet.save();
+
+    const populatedTimesheet = await Timesheet.findById(timesheet._id)
+      .populate('agentId', 'name email');
+
+    res.json({ success: true, timesheet: populatedTimesheet });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   DELETE /api/admin/timesheets/:id
+// @desc    Delete a timesheet entry
+// @access  Private (Admin)
+router.delete('/timesheets/:id', protect, authorize('admin'), async (req, res) => {
+  try {
+    const timesheet = await Timesheet.findById(req.params.id);
+    if (!timesheet) {
+      return res.status(404).json({ message: 'Timesheet entry not found' });
+    }
+
+    await Timesheet.findByIdAndDelete(req.params.id);
+    res.json({ success: true, message: 'Timesheet entry deleted successfully' });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
   }
