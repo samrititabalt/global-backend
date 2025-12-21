@@ -107,14 +107,15 @@ router.post('/plans', protect, authorize('admin'), [
       return res.status(400).json({ errors: errors.array() });
     }
 
-    const { name, description, price, tokens, hoursPerMonth, bonusFeatures, isActive } = req.body;
+    const { name, description, price, tokens, minutesPerMonth, hoursPerMonth, bonusFeatures, isActive } = req.body;
 
     const plan = await Plan.create({
       name,
       description,
       price,
       tokens,
-      hoursPerMonth: hoursPerMonth || null,
+      minutesPerMonth: minutesPerMonth || null,
+      hoursPerMonth: hoursPerMonth || null, // Keep for backward compatibility
       bonusFeatures: bonusFeatures || [],
       isActive: isActive !== undefined ? isActive : true
     });
@@ -142,11 +143,11 @@ router.get('/plans', protect, authorize('admin'), async (req, res) => {
 // @access  Private (Admin)
 router.put('/plans/:id', protect, authorize('admin'), async (req, res) => {
   try {
-    const { name, description, price, tokens, hoursPerMonth, bonusFeatures, isActive } = req.body;
+    const { name, description, price, tokens, minutesPerMonth, hoursPerMonth, bonusFeatures, isActive } = req.body;
     
     const plan = await Plan.findByIdAndUpdate(
       req.params.id,
-      { name, description, price, tokens, hoursPerMonth, bonusFeatures, isActive },
+      { name, description, price, tokens, minutesPerMonth, hoursPerMonth, bonusFeatures, isActive },
       { new: true, runValidators: true }
     );
 

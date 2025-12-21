@@ -4,8 +4,9 @@ const DEFAULT_PLANS = [
     name: 'Basic Trial Pack',
     description: '300 minutes/month',
     price: 49.99,
-    tokens: 300, // 5 hours * 60 minutes = 300 minutes
-    hoursPerMonth: 5, // Keep for backward compatibility/display
+    tokens: 300, // 300 minutes
+    minutesPerMonth: 300,
+    hoursPerMonth: 5, // Keep for backward compatibility
     bonusFeatures: [],
     marketingLabel: 'BASIC TRIAL PACK',
     marketingSummary: 'Perfect for trying out our services with minimal commitment.',
@@ -22,8 +23,9 @@ const DEFAULT_PLANS = [
     name: 'Starter',
     description: '1200 minutes/month',
     price: 99.99,
-    tokens: 1200, // 20 hours * 60 minutes = 1200 minutes
-    hoursPerMonth: 20, // Keep for backward compatibility/display
+    tokens: 1200, // 1200 minutes
+    minutesPerMonth: 1200,
+    hoursPerMonth: 20, // Keep for backward compatibility
     bonusFeatures: [],
     marketingLabel: 'STARTER PACK',
     marketingSummary: 'Best for teams that are ready to scale with confidence.',
@@ -40,8 +42,9 @@ const DEFAULT_PLANS = [
     name: 'Full Time',
     description: '9600 minutes/month (Bonus: Weekend Support)',
     price: 3000,
-    tokens: 9600, // 160 hours * 60 minutes = 9600 minutes
-    hoursPerMonth: 160, // Keep for backward compatibility/display
+    tokens: 9600, // 9600 minutes
+    minutesPerMonth: 9600,
+    hoursPerMonth: 160, // Keep for backward compatibility
     bonusFeatures: ['Weekend Support'],
     marketingLabel: 'FULL TIME',
     marketingSummary: 'Premium capacity with weekend coverage and premium SLAs.',
@@ -58,8 +61,9 @@ const DEFAULT_PLANS = [
     name: 'Load Cash Minimum',
     description: 'Minimum (120 minutes)',
     price: 50,
-    tokens: 120, // 2 hours * 60 minutes = 120 minutes
-    hoursPerMonth: 2, // Keep for backward compatibility/display
+    tokens: 120, // 120 minutes
+    minutesPerMonth: 120,
+    hoursPerMonth: 2, // Keep for backward compatibility
     bonusFeatures: [],
     marketingLabel: 'LOAD CASH MINIMUM',
     marketingSummary: 'Flexible minimum load with on-demand access.',

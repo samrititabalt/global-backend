@@ -17,6 +17,11 @@ const planSchema = new mongoose.Schema({
     type: Number,
     required: true
   },
+  minutesPerMonth: {
+    type: Number,
+    default: null
+  },
+  // Keep hoursPerMonth for backward compatibility (deprecated)
   hoursPerMonth: {
     type: Number,
     default: null
