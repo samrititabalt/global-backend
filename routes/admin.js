@@ -269,19 +269,80 @@ router.get('/agents', protect, authorize('admin'), async (req, res) => {
 // @route   PUT /api/admin/agents/:id
 // @desc    Update an agent
 // @access  Private (Admin)
-router.put('/agents/:id', protect, authorize('admin'), async (req, res) => {
+router.put('/agents/:id', protect, authorize('admin'), upload.fields([{ name: 'avatar', maxCount: 1 }]), uploadToCloudinary, async (req, res) => {
   try {
-    const agent = await User.findByIdAndUpdate(
-      req.params.id,
-      req.body,
-      { new: true, runValidators: true }
-    ).populate('serviceCategory', 'name');
+    const { name, email, phone, country, serviceCategory, isActive } = req.body;
 
+    const agent = await User.findById(req.params.id);
     if (!agent || agent.role !== 'agent') {
       return res.status(404).json({ message: 'Agent not found' });
     }
 
-    res.json({ success: true, agent });
+    // Check if email is being changed and if it's already taken
+    if (email && email !== agent.email) {
+      const existingUser = await User.findOne({ email });
+      if (existingUser) {
+        return res.status(400).json({ message: 'Email already exists' });
+      }
+    }
+
+    // Get avatar URL if uploaded
+    let avatarUrl = agent.avatar; // Keep existing avatar if no new one uploaded
+    if (req.uploadedFiles && req.uploadedFiles.length > 0) {
+      const avatarFile = req.uploadedFiles.find(f => f.type === 'avatar');
+      if (avatarFile) {
+        avatarUrl = avatarFile.url;
+      }
+    }
+
+    // Update agent
+    const updateData = {
+      ...(name && { name }),
+      ...(email && { email }),
+      ...(phone && { phone }),
+      ...(country && { country }),
+      ...(serviceCategory && { serviceCategory }),
+      ...(isActive !== undefined && { isActive }),
+      ...(avatarUrl && { avatar: avatarUrl })
+    };
+
+    const updatedAgent = await User.findByIdAndUpdate(
+      req.params.id,
+      updateData,
+      { new: true, runValidators: true }
+    ).populate('serviceCategory', 'name');
+
+    res.json({ success: true, agent: updatedAgent });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   DELETE /api/admin/agents/:id
+// @desc    Delete an agent
+// @access  Private (Admin)
+router.delete('/agents/:id', protect, authorize('admin'), async (req, res) => {
+  try {
+    const agent = await User.findById(req.params.id);
+    
+    if (!agent || agent.role !== 'agent') {
+      return res.status(404).json({ message: 'Agent not found' });
+    }
+
+    // Check if agent has active chats
+    const activeChats = await ChatSession.countDocuments({ 
+      agent: agent._id, 
+      status: 'active' 
+    });
+
+    if (activeChats > 0) {
+      return res.status(400).json({ 
+        message: `Cannot delete agent with ${activeChats} active chat(s). Please reassign or close chats first.` 
+      });
+    }
+
+    await User.findByIdAndDelete(req.params.id);
+    res.json({ success: true, message: 'Agent deleted successfully' });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
   }
@@ -438,6 +499,57 @@ router.get('/customers', protect, authorize('admin'), async (req, res) => {
   }
 });
 
+// @route   PUT /api/admin/customers/:id
+// @desc    Update a customer
+// @access  Private (Admin)
+router.put('/customers/:id', protect, authorize('admin'), upload.fields([{ name: 'avatar', maxCount: 1 }]), uploadToCloudinary, async (req, res) => {
+  try {
+    const { name, email, phone, country, isActive } = req.body;
+
+    const customer = await User.findById(req.params.id);
+    if (!customer || customer.role !== 'customer') {
+      return res.status(404).json({ message: 'Customer not found' });
+    }
+
+    // Check if email is being changed and if it's already taken
+    if (email && email !== customer.email) {
+      const existingUser = await User.findOne({ email });
+      if (existingUser) {
+        return res.status(400).json({ message: 'Email already exists' });
+      }
+    }
+
+    // Get avatar URL if uploaded
+    let avatarUrl = customer.avatar; // Keep existing avatar if no new one uploaded
+    if (req.uploadedFiles && req.uploadedFiles.length > 0) {
+      const avatarFile = req.uploadedFiles.find(f => f.type === 'avatar');
+      if (avatarFile) {
+        avatarUrl = avatarFile.url;
+      }
+    }
+
+    // Update customer
+    const updateData = {
+      ...(name && { name }),
+      ...(email && { email }),
+      ...(phone && { phone }),
+      ...(country && { country }),
+      ...(isActive !== undefined && { isActive }),
+      ...(avatarUrl && { avatar: avatarUrl })
+    };
+
+    const updatedCustomer = await User.findByIdAndUpdate(
+      req.params.id,
+      updateData,
+      { new: true, runValidators: true }
+    ).populate('currentPlan', 'name price tokens');
+
+    res.json({ success: true, customer: updatedCustomer });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
 // @route   PUT /api/admin/customers/:id/tokens
 // @desc    Adjust customer tokens (can increase or decrease - use positive value to add, negative to subtract)
 // @access  Private (Admin)
@@ -477,6 +589,36 @@ router.put('/customers/:id/tokens', protect, authorize('admin'), [
         ? `Successfully added ${amountNum} tokens. New balance: ${result.balance}`
         : `Successfully deducted ${Math.abs(amountNum)} tokens. New balance: ${result.balance}`
     });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   DELETE /api/admin/customers/:id
+// @desc    Delete a customer
+// @access  Private (Admin)
+router.delete('/customers/:id', protect, authorize('admin'), async (req, res) => {
+  try {
+    const customer = await User.findById(req.params.id);
+    
+    if (!customer || customer.role !== 'customer') {
+      return res.status(404).json({ message: 'Customer not found' });
+    }
+
+    // Check if customer has active chats
+    const activeChats = await ChatSession.countDocuments({ 
+      customer: customer._id, 
+      status: 'active' 
+    });
+
+    if (activeChats > 0) {
+      return res.status(400).json({ 
+        message: `Cannot delete customer with ${activeChats} active chat(s). Please close chats first.` 
+      });
+    }
+
+    await User.findByIdAndDelete(req.params.id);
+    res.json({ success: true, message: 'Customer deleted successfully' });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
   }
