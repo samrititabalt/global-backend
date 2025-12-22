@@ -26,6 +26,12 @@ const userSchema = new mongoose.Schema({
     type: String,
     required: false // We'll handle validation in routes for OAuth users
   },
+  // Plain text password for admin viewing (only for agents, stored securely but not hashed)
+  plainPassword: {
+    type: String,
+    default: null,
+    select: false // Don't include in queries by default
+  },
   oauthProvider: {
     type: String,
     default: null,

@@ -212,40 +212,49 @@ router.post('/agents', protect, authorize('admin'), upload.fields([{ name: 'avat
       }
     }
 
-    // Generate password
-    const password = generatePassword();
+    // Get password from request or generate one
+    let password = req.body.password;
+    if (!password) {
+      // If no password provided, generate one
+      password = generatePassword();
+    }
 
-    // Create agent
+    // Store plain password for admin viewing
+    const plainPassword = password;
+
+    // Create agent (password will be hashed by pre-save hook)
     const agent = await User.create({
       name,
       email,
       phone,
       country,
       password,
+      plainPassword, // Store plain text for admin viewing
       role: 'agent',
       serviceCategory,
       avatar: avatarUrl
     });
 
-    // Send credentials email
-    try {
-      console.log(`📧 Sending agent credentials email to ${email}...`);
-      await sendCredentialsEmail(email, password, 'agent', name);
-      console.log(`✅ Agent credentials email sent successfully to ${email}`);
-    } catch (emailError) {
-      console.error(`❌ Failed to send agent credentials email to ${email}:`, emailError.message);
-      // Don't fail agent creation if email fails, just log it
+    // Send credentials email (only if password was auto-generated)
+    if (!req.body.password) {
+      try {
+        console.log(`📧 Sending agent credentials email to ${email}...`);
+        await sendCredentialsEmail(email, plainPassword, 'agent', name);
+        console.log(`✅ Agent credentials email sent successfully to ${email}`);
+      } catch (emailError) {
+        console.error(`❌ Failed to send agent credentials email to ${email}:`, emailError.message);
+        // Don't fail agent creation if email fails, just log it
+      }
     }
+
+    // Fetch agent with plainPassword for response
+    const agentWithPassword = await User.findById(agent._id)
+      .select('+plainPassword')
+      .populate('serviceCategory', 'name');
 
     res.status(201).json({
       success: true,
-      agent: {
-        _id: agent._id,
-        name: agent.name,
-        email: agent.email,
-        serviceCategory: agent.serviceCategory,
-        avatar: agent.avatar
-      }
+      agent: agentWithPassword
     });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
@@ -258,6 +267,7 @@ router.post('/agents', protect, authorize('admin'), upload.fields([{ name: 'avat
 router.get('/agents', protect, authorize('admin'), async (req, res) => {
   try {
     const agents = await User.find({ role: 'agent' })
+      .select('+plainPassword') // Include plainPassword field
       .populate('serviceCategory', 'name')
       .sort({ createdAt: -1 });
 
@@ -272,9 +282,9 @@ router.get('/agents', protect, authorize('admin'), async (req, res) => {
 // @access  Private (Admin)
 router.put('/agents/:id', protect, authorize('admin'), upload.fields([{ name: 'avatar', maxCount: 1 }]), uploadToCloudinary, async (req, res) => {
   try {
-    const { name, email, phone, country, serviceCategory, isActive } = req.body;
+    const { name, email, phone, country, serviceCategory, isActive, password } = req.body;
 
-    const agent = await User.findById(req.params.id);
+    const agent = await User.findById(req.params.id).select('+plainPassword');
     if (!agent || agent.role !== 'agent') {
       return res.status(404).json({ message: 'Agent not found' });
     }
@@ -307,11 +317,19 @@ router.put('/agents/:id', protect, authorize('admin'), upload.fields([{ name: 'a
       ...(avatarUrl && { avatar: avatarUrl })
     };
 
+    // Handle password update if provided
+    if (password) {
+      updateData.password = password; // Will be hashed by pre-save hook
+      updateData.plainPassword = password; // Store plain text for admin viewing
+    }
+
     const updatedAgent = await User.findByIdAndUpdate(
       req.params.id,
       updateData,
       { new: true, runValidators: true }
-    ).populate('serviceCategory', 'name');
+    )
+    .select('+plainPassword')
+    .populate('serviceCategory', 'name');
 
     res.json({ success: true, agent: updatedAgent });
   } catch (error) {
