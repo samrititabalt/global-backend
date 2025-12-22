@@ -195,12 +195,9 @@ router.post('/login', [
       return res.status(401).json({ message: 'Invalid credentials' });
     }
 
-    if (!user.isActive) {
-      return res.status(401).json({ message: 'Account is deactivated' });
-    }
-
     // STRICT ROLE-BASED LOGIN RESTRICTION
     // If expectedRole is provided, user's role MUST match
+    // This check happens BEFORE password check to prevent role confusion
     if (expectedRole && user.role !== expectedRole) {
       return res.status(403).json({ 
         message: `Access denied. ${user.role === 'customer' ? 'Customer' : user.role === 'agent' ? 'Agent' : 'Admin'} accounts can only login through the ${user.role} portal.` 
@@ -211,6 +208,10 @@ router.post('/login', [
     if (!isMatch) {
       return res.status(401).json({ message: 'Invalid credentials' });
     }
+
+    // Allow login even if account is inactive
+    // Admin can reactivate accounts, and agents should be able to log in to see their status
+    // The frontend can display a warning if isActive is false
 
     const token = generateToken(user._id);
 
@@ -225,15 +226,17 @@ router.post('/login', [
       token,
       user: {
         id: user._id,
+        _id: user._id, // Include _id for consistency
         name: user.name,
         email: user.email,
         role: user.role,
         tokenBalance: user.tokenBalance,
         serviceCategory: user.serviceCategory,
-        isOnline: user.isOnline
+        isOnline: user.isOnline,
+        isActive: user.isActive // Include isActive status so frontend can show warning if needed
       }
     });
-    console.log("login successfull");
+    console.log(`Login successful for ${user.role}: ${user.email} (Active: ${user.isActive})`);
     
   } catch (error) {
     console.error('Login error:', error);
