@@ -58,6 +58,12 @@ const userSchema = new mongoose.Schema({
     required: true
   },
   // Customer specific fields
+  customerId: {
+    type: String,
+    unique: true,
+    sparse: true, // Only unique when present
+    default: null
+  },
   tokenBalance: {
     type: Number,
     default: 0
@@ -131,6 +137,14 @@ const userSchema = new mongoose.Schema({
 });
 
 userSchema.pre('save', async function(next) {
+  // Generate customer ID for new customers
+  if (this.role === 'customer' && !this.customerId && this.isNew) {
+    // Generate customer ID: CUST + timestamp + random 4 digits
+    const timestamp = Date.now().toString().slice(-8);
+    const random = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
+    this.customerId = `CUST${timestamp}${random}`;
+  }
+  
   // Skip password hashing if user is OAuth-only and password is not set
   if (!this.isModified('password') || (this.oauthProvider && !this.password)) {
     return next();

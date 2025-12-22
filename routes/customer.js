@@ -10,6 +10,7 @@ const { checkTokenBalance } = require('../services/tokenService');
 const { assignAgent } = require('../services/agentAssignment');
 const { sendAIMessages } = require('../services/aiMessages');
 const { ensureDefaultPlans, formatPlanForResponse } = require('../utils/planDefaults');
+const { sendAgentAlertEmail } = require('../utils/agentAlertEmail');
 
 // @route   GET /api/customer/plans
 // @desc    Get all available plans
@@ -56,6 +57,47 @@ router.post('/request-service', protect, authorize('customer'), async (req, res)
     const service = await Service.findById(serviceId);
     if (!service) {
       return res.status(404).json({ message: 'Service not found' });
+    }
+
+    // Check if any agents are online (for this service or any service)
+    const onlineAgents = await User.find({
+      role: 'agent',
+      isOnline: true,
+      isActive: true
+    }).select('email');
+
+    // If no agents are online, send alert emails and return error
+    if (!onlineAgents || onlineAgents.length === 0) {
+      // Get all agent emails (including offline ones for notification)
+      const allAgents = await User.find({
+        role: 'agent',
+        isActive: true
+      }).select('email');
+
+      if (allAgents && allAgents.length > 0) {
+        const agentEmails = allAgents.map(agent => agent.email).filter(Boolean);
+        
+        // Get customer details with customer ID
+        const customerWithId = await User.findById(customer._id).select('name customerId');
+        
+        // Send alert emails to all agents
+        try {
+          await sendAgentAlertEmail(agentEmails, {
+            name: customerWithId.name || customer.name,
+            customerId: customerWithId.customerId || 'N/A',
+            timestamp: new Date()
+          });
+        } catch (emailError) {
+          console.error('Error sending agent alert emails:', emailError);
+          // Continue even if email fails - don't block the response
+        }
+      }
+
+      return res.status(503).json({
+        success: false,
+        message: 'All agents are currently offline. We\'ve notified the team and someone will be with you shortly.',
+        allAgentsOffline: true
+      });
     }
 
     // Create chat session
