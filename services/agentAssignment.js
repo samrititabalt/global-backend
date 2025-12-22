@@ -3,14 +3,24 @@ const ChatSession = require('../models/ChatSession');
 
 const assignAgent = async (serviceId, chatSessionId) => {
   try {
-    // Find all agents for this service who are online and available
-    const agents = await User.find({
+    // First, try to find agents matching the service category who are online and available
+    let agents = await User.find({
       role: 'agent',
       serviceCategory: serviceId,
       isOnline: true,
       isAvailable: true,
       isActive: true
     }).sort({ activeChats: 1 }); // Sort by number of active chats (load balancing)
+
+    // If no preferred agents are available, allow ANY available agent
+    if (agents.length === 0) {
+      agents = await User.find({
+        role: 'agent',
+        isOnline: true,
+        isAvailable: true,
+        isActive: true
+      }).sort({ activeChats: 1 }); // Sort by number of active chats (load balancing)
+    }
 
     if (agents.length === 0) {
       return null; // No available agents

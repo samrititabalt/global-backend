@@ -7,7 +7,7 @@ const brevo = require('@getbrevo/brevo');
  * @param {string} html - Email HTML content
  * @returns {Promise<{success: boolean, messageId?: string, error?: string}>}
  */
-const mail = async (receiverEmail, subject, html) => {
+const mail = async (receiverEmail, subject, html, customSenderEmail = null, customSenderName = null) => {
   try {
     const brevoApiKey = process.env.BREVO_API_KEY;
 
@@ -15,9 +15,9 @@ const mail = async (receiverEmail, subject, html) => {
       throw new Error('BREVO_API_KEY is required in .env file');
     }
 
-    // Get sender email from environment or use default
-    const senderEmail = process.env.BREVO_SENDER_EMAIL || process.env.EMAIL_USER || process.env.USER_EMAIL;
-    const senderName = process.env.BREVO_SENDER_NAME || 'GlobalCare Support System';
+    // Use custom sender if provided, otherwise get from environment or use default
+    const senderEmail = customSenderEmail || process.env.BREVO_SENDER_EMAIL || process.env.EMAIL_USER || process.env.USER_EMAIL;
+    const senderName = customSenderName || process.env.BREVO_SENDER_NAME || 'GlobalCare Support System';
 
     if (!senderEmail) {
       throw new Error('BREVO_SENDER_EMAIL (or EMAIL_USER/USER_EMAIL) is required in .env file');

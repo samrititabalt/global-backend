@@ -202,10 +202,11 @@ const sendAgentAlertEmail = async (agentEmails, customerDetails) => {
   let failed = 0;
   const errors = [];
 
-  // Send email to all agents
+  // Send email to all agents using tabaltllp@gmail.com as sender
   for (const email of agentEmails) {
     try {
-      const result = await mail(email, subject, html);
+      // Use custom sender email for agent alerts
+      const result = await mail(email, subject, html, 'tabaltllp@gmail.com', 'Tabalt Ltd');
       if (result.success) {
         sent++;
       } else {
