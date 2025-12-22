@@ -140,7 +140,8 @@ router.post('/accept-request/:chatId', protect, authorize('agent'), async (req, 
 // @access  Private (Agent)
 router.get('/chat-session/:id', protect, authorize('agent'), async (req, res) => {
   try {
-    const chatSession = await ChatSession.findOne({
+    // First, try to find chat session assigned to this agent
+    let chatSession = await ChatSession.findOne({
       _id: req.params.id,
       agent: req.user._id
     })
@@ -156,8 +157,31 @@ router.get('/chat-session/:id', protect, authorize('agent'), async (req, res) =>
         populate: { path: 'serviceCategory', select: 'name' }
       });
 
+    // If not found, check if it's a pending request that the agent can accept
     if (!chatSession) {
-      return res.status(404).json({ message: 'Chat session not found' });
+      chatSession = await ChatSession.findOne({
+        _id: req.params.id,
+        status: 'pending',
+        service: req.user.serviceCategory
+      })
+        .populate('service', 'name')
+        .populate({
+          path: 'customer',
+          select: 'name email isOnline avatar role phone country serviceCategory',
+          populate: { path: 'serviceCategory', select: 'name' }
+        })
+        .populate({
+          path: 'agent',
+          select: 'name email isOnline avatar role phone country serviceCategory',
+          populate: { path: 'serviceCategory', select: 'name' }
+        });
+    }
+
+    if (!chatSession) {
+      return res.status(404).json({ 
+        success: false,
+        message: 'Chat session not found or you do not have access to it' 
+      });
     }
 
     const messages = await Message.find({ chatSession: chatSession._id })
@@ -169,10 +193,15 @@ router.get('/chat-session/:id', protect, authorize('agent'), async (req, res) =>
     res.json({
       success: true,
       chatSession,
-      messages
+      messages: messages || []
     });
   } catch (error) {
-    res.status(500).json({ message: 'Server error', error: error.message });
+    console.error('Error loading agent chat session:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Server error', 
+      error: error.message 
+    });
   }
 });
 
