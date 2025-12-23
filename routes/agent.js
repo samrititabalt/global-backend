@@ -10,10 +10,7 @@ const User = require('../models/User');
 // @access  Private (Agent)
 router.get('/dashboard', protect, authorize('agent'), async (req, res) => {
   try {
-    // Populate agent with serviceCategory
-    const agent = await User.findById(req.user._id)
-      .populate('serviceCategory', 'name')
-      .select('name email role serviceCategory isOnline isAvailable isActive');
+    const agent = req.user;
 
     // Helper function to add lastMessage and unreadCount to chat sessions
     const addLastMessageToChats = async (chats) => {
@@ -88,12 +85,6 @@ router.get('/dashboard', protect, authorize('agent'), async (req, res) => {
 
     res.json({
       success: true,
-      agent: {
-        _id: agent._id,
-        name: agent.name,
-        email: agent.email,
-        serviceCategory: agent.serviceCategory
-      },
       dashboard: {
         pendingRequests: pendingWithLastMessage,
         activeChats: activeWithLastMessage,
