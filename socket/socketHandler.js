@@ -98,11 +98,18 @@ const socketHandler = (io) => {
             isOnline: chatSession.agent.isOnline || false
           });
         } else if (user.role === 'agent' && chatSession.customer) {
-          // Agent joined, send customer's status
+          // Agent joined, send customer's status to agent
           socket.emit('userOnline', {
             userId: chatSession.customer._id,
             role: 'customer',
             isOnline: chatSession.customer.isOnline || false
+          });
+          
+          // IMPORTANT: Send agent's online status to customer in the chat room
+          io.to(`chat_${chatSessionId}`).emit('userOnline', {
+            userId: user._id.toString(),
+            role: 'agent',
+            isOnline: user.isOnline || true // Agent is online if they're joining
           });
 
           // Only create system message if agent is assigned to this chat and chat is active

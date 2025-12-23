@@ -162,11 +162,11 @@ router.post('/accept-request/:chatId', protect, authorize('agent'), async (req, 
     const io = req.app.get('io');
     if (io) {
       const populatedChat = await ChatSession.findById(chatSession._id)
-        .populate('customer', 'name email')
+        .populate('customer', 'name email isOnline')
         .populate('service', 'name')
-        .populate('agent', 'name email');
+        .populate('agent', 'name email isOnline');
       
-      // Emit agent online status update
+      // Emit agent online status update globally
       io.emit('agentOnline', { agentId: req.user._id.toString() });
       
       // Emit to the specific agent that their status was updated
@@ -175,6 +175,22 @@ router.post('/accept-request/:chatId', protect, authorize('agent'), async (req, 
         isOnline: true,
         isAvailable: true
       });
+      
+      // IMPORTANT: Emit userOnline to the chat room so customer sees agent as online
+      io.to(`chat_${chatSession._id}`).emit('userOnline', {
+        userId: req.user._id.toString(),
+        role: 'agent',
+        isOnline: true
+      });
+      
+      // Also emit customer's status to agent if customer is online
+      if (populatedChat.customer && populatedChat.customer.isOnline) {
+        io.to(`chat_${chatSession._id}`).emit('userOnline', {
+          userId: populatedChat.customer._id.toString(),
+          role: 'customer',
+          isOnline: true
+        });
+      }
       
       io.emit('requestAccepted', {
         chatSessionId: chatSession._id,
