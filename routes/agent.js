@@ -156,6 +156,36 @@ router.post('/accept-request/:chatId', protect, authorize('agent'), async (req, 
       messageType: 'system'
     });
 
+    // Emit real-time event that request was accepted
+    const io = req.app.get('io');
+    if (io) {
+      const populatedChat = await ChatSession.findById(chatSession._id)
+        .populate('customer', 'name email')
+        .populate('service', 'name')
+        .populate('agent', 'name email');
+      
+      io.emit('requestAccepted', {
+        chatSessionId: chatSession._id,
+        agentId: req.user._id.toString(),
+        chatSession: {
+          _id: populatedChat._id,
+          customer: {
+            _id: populatedChat.customer._id,
+            name: populatedChat.customer.name
+          },
+          service: {
+            _id: populatedChat.service._id,
+            name: populatedChat.service.name
+          },
+          agent: {
+            _id: populatedChat.agent._id,
+            name: populatedChat.agent.name
+          },
+          status: populatedChat.status
+        }
+      });
+    }
+
     res.json({
       success: true,
       chatSession,

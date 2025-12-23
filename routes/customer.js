@@ -77,6 +77,36 @@ router.post('/request-service', protect, authorize('customer'), async (req, res)
       // Don't block the response if notifications fail
     });
 
+    // Emit real-time event to agents with matching serviceCategory
+    // Get io instance from app
+    const io = req.app.get('io');
+    if (io) {
+      // Populate chat session for the event
+      const populatedChat = await ChatSession.findById(chatSession._id)
+        .populate('customer', 'name email')
+        .populate('service', 'name');
+      
+      // Emit to all agents with matching serviceCategory
+      // Agents will be listening for 'newPendingRequest' event
+      io.emit('newPendingRequest', {
+        chatSession: {
+          _id: populatedChat._id,
+          customer: {
+            _id: populatedChat.customer._id,
+            name: populatedChat.customer.name
+          },
+          service: {
+            _id: populatedChat.service._id,
+            name: populatedChat.service.name
+          },
+          subService: populatedChat.subService,
+          status: populatedChat.status,
+          createdAt: populatedChat.createdAt
+        },
+        serviceId: serviceId.toString() // So agents can filter by their serviceCategory
+      });
+    }
+
     res.json({
       success: true,
       chatSession: {
