@@ -105,25 +105,41 @@ router.get('/dashboard', protect, authorize('agent'), async (req, res) => {
 // @access  Private (Agent)
 router.post('/accept-request/:chatId', protect, authorize('agent'), async (req, res) => {
   try {
-    const chatSession = await ChatSession.findById(req.params.chatId);
+    // Use findOneAndUpdate for atomic operation to prevent race conditions
+    // Only update if status is 'pending' and agent is null
+    const chatSession = await ChatSession.findOneAndUpdate(
+      {
+        _id: req.params.chatId,
+        status: 'pending',
+        agent: null
+      },
+      {
+        agent: req.user._id,
+        status: 'active',
+        assignedAt: new Date()
+      },
+      {
+        new: true,
+        runValidators: true
+      }
+    )
+      .populate('customer', 'name email')
+      .populate('service', 'name');
 
     if (!chatSession) {
-      return res.status(404).json({ message: 'Chat session not found' });
+      // Check if chat exists but is already accepted or not pending
+      const existingChat = await ChatSession.findById(req.params.chatId);
+      if (!existingChat) {
+        return res.status(404).json({ message: 'Chat session not found' });
+      }
+      if (existingChat.agent) {
+        return res.status(400).json({ message: 'This request has already been accepted by another agent' });
+      }
+      if (existingChat.status !== 'pending') {
+        return res.status(400).json({ message: 'This request is no longer pending' });
+      }
+      return res.status(400).json({ message: 'Unable to accept request. Please try again.' });
     }
-
-    if (chatSession.agent && chatSession.agent.toString() !== req.user._id.toString()) {
-      return res.status(400).json({ message: 'This request has already been accepted by another agent' });
-    }
-
-    if (chatSession.status !== 'pending') {
-      return res.status(400).json({ message: 'This request is no longer pending' });
-    }
-
-    // Assign agent
-    chatSession.agent = req.user._id;
-    chatSession.status = 'active';
-    chatSession.assignedAt = new Date();
-    await chatSession.save();
 
     // Add to agent's active chats
     await User.findByIdAndUpdate(req.user._id, {

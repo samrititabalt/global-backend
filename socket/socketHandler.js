@@ -257,11 +257,9 @@ const socketHandler = (io) => {
           await incrementAgentMinutesForMessage(senderId);
         }
 
-        // Update chat session status
-        if (chatSession.status === 'pending') {
-          chatSession.status = 'active';
-          await chatSession.save();
-        }
+        // Don't auto-change status from pending to active
+        // Status should only change when agent accepts the request via accept-request endpoint
+        // This ensures chats stay in 'pending' until an agent explicitly accepts them
 
         // Populate message
         const populatedMessage = await Message.findById(message._id)
