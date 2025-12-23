@@ -141,10 +141,12 @@ router.post('/accept-request/:chatId', protect, authorize('agent'), async (req, 
       return res.status(400).json({ message: 'Unable to accept request. Please try again.' });
     }
 
-    // Add to agent's active chats
-    await User.findByIdAndUpdate(req.user._id, {
-      $addToSet: { activeChats: chatSession._id }
-    });
+    // Add to agent's active chats and ensure agent is marked as online
+    const agent = await User.findByIdAndUpdate(req.user._id, {
+      $addToSet: { activeChats: chatSession._id },
+      isOnline: true, // Ensure agent is marked as online when accepting request
+      isAvailable: true
+    }, { new: true });
 
     // Create system message: Agent has joined the chat
     const systemMessage = await Message.create({
@@ -163,6 +165,16 @@ router.post('/accept-request/:chatId', protect, authorize('agent'), async (req, 
         .populate('customer', 'name email')
         .populate('service', 'name')
         .populate('agent', 'name email');
+      
+      // Emit agent online status update
+      io.emit('agentOnline', { agentId: req.user._id.toString() });
+      
+      // Emit to the specific agent that their status was updated
+      io.to(`user_${req.user._id}`).emit('agentStatusUpdate', {
+        agentId: req.user._id.toString(),
+        isOnline: true,
+        isAvailable: true
+      });
       
       io.emit('requestAccepted', {
         chatSessionId: chatSession._id,
