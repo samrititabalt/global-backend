@@ -143,7 +143,7 @@ const sendEmailNotification = async (agents, chatData) => {
             </div>
 
             <p style="color: #666; font-size: 14px; margin-top: 20px;">
-              Click the button above to join the chat and assist the customer. The customer is currently chatting with ASKSAM AI and waiting for a human agent.
+              Click the button above to join the chat and assist the customer. The customer is waiting for an agent to respond.
             </p>
           </div>
           <div class="footer">

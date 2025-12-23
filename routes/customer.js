@@ -7,7 +7,6 @@ const Service = require('../models/Service');
 const ChatSession = require('../models/ChatSession');
 const Message = require('../models/Message');
 const { checkTokenBalance } = require('../services/tokenService');
-const { sendAIMessages } = require('../services/aiMessages');
 const { ensureDefaultPlans, formatPlanForResponse } = require('../utils/planDefaults');
 const { notifyAgentsForNewChat } = require('../services/agentNotificationService');
 
@@ -77,9 +76,6 @@ router.post('/request-service', protect, authorize('customer'), async (req, res)
       console.error('Error sending agent notifications:', err);
       // Don't block the response if notifications fail
     });
-
-    // Send AI messages (will be handled by socket)
-    // This will be triggered via socket when customer joins the chat
 
     res.json({
       success: true,

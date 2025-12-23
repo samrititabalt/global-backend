@@ -2,7 +2,6 @@ const User = require('../models/User');
 const ChatSession = require('../models/ChatSession');
 const Message = require('../models/Message');
 const Call = require('../models/Call');
-const { sendInitialAIGreeting, respondToCustomerMessage } = require('../services/aiMessages');
 const { assignAgent, reassignAgent } = require('../services/agentAssignment');
 const { deductToken, checkTokenBalance } = require('../services/tokenService');
 
@@ -150,13 +149,7 @@ const socketHandler = (io) => {
           }
         }
 
-        // Send AI greeting if this is a new chat and customer is joining
-        if (chatSession.customer._id.toString() === socket.userId && 
-            !chatSession.aiMessagesSent && 
-            chatSession.status === 'pending' &&
-            !chatSession.agent) {
-          await sendInitialAIGreeting(chatSessionId, io);
-        }
+        // AI integration removed - no automatic greetings
 
         // Notify others in the chat
         socket.to(`chat_${chatSessionId}`).emit('userJoined', {
@@ -303,14 +296,7 @@ const socketHandler = (io) => {
           const updatedUser = await User.findById(senderId);
           socket.emit('tokenBalanceUpdate', { balance: updatedUser.tokenBalance });
           
-          // Generate AI response if no agent has joined
-          const currentChatSession = await ChatSession.findById(chatSessionId);
-          if (currentChatSession && !currentChatSession.agent) {
-            // Delay AI response slightly to feel natural
-            setTimeout(async () => {
-              await respondToCustomerMessage(chatSessionId, messageData, io);
-            }, 1000);
-          }
+          // AI integration removed - no automatic responses
         }
       } catch (error) {
         console.error('Send message error:', error);
