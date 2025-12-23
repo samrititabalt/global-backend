@@ -2,7 +2,7 @@ const User = require('../models/User');
 const ChatSession = require('../models/ChatSession');
 const Message = require('../models/Message');
 const Call = require('../models/Call');
-const { sendAIMessages } = require('../services/aiMessages');
+const { sendInitialAIGreeting, respondToCustomerMessage } = require('../services/aiMessages');
 const { assignAgent, reassignAgent } = require('../services/agentAssignment');
 const { deductToken, checkTokenBalance } = require('../services/tokenService');
 
@@ -105,13 +105,42 @@ const socketHandler = (io) => {
             role: 'customer',
             isOnline: chatSession.customer.isOnline || false
           });
+
+          // Create system message when agent joins
+          const agentJoinMessage = await Message.create({
+            chatSession: chatSessionId,
+            sender: user._id,
+            senderRole: 'system',
+            senderType: 'system',
+            content: `Agent ${user.name} has joined the chat`,
+            messageType: 'system'
+          });
+
+          // Emit system message to chat room
+          const systemMessageData = {
+            _id: agentJoinMessage._id,
+            chatSession: chatSessionId,
+            sender: {
+              _id: 'SYSTEM',
+              name: 'System',
+              role: 'system'
+            },
+            senderRole: 'system',
+            senderType: 'system',
+            content: `Agent ${user.name} has joined the chat`,
+            messageType: 'system',
+            createdAt: agentJoinMessage.createdAt
+          };
+
+          io.to(`chat_${chatSessionId}`).emit('newMessage', systemMessageData);
         }
 
-        // Send AI messages if this is a new chat and customer is joining
+        // Send AI greeting if this is a new chat and customer is joining
         if (chatSession.customer._id.toString() === socket.userId && 
             !chatSession.aiMessagesSent && 
-            chatSession.status === 'pending') {
-          await sendAIMessages(chatSessionId, io);
+            chatSession.status === 'pending' &&
+            !chatSession.agent) {
+          await sendInitialAIGreeting(chatSessionId, io);
         }
 
         // Notify others in the chat
@@ -253,10 +282,20 @@ const socketHandler = (io) => {
         // Emit to all in chat room
         io.to(`chat_${chatSessionId}`).emit('newMessage', messageData);
 
-        // Update token balance for customer
+        // If customer sent a message and no agent has joined, generate AI response
         if (sender.role === 'customer') {
+          // Update token balance for customer
           const updatedUser = await User.findById(senderId);
           socket.emit('tokenBalanceUpdate', { balance: updatedUser.tokenBalance });
+          
+          // Generate AI response if no agent has joined
+          const currentChatSession = await ChatSession.findById(chatSessionId);
+          if (currentChatSession && !currentChatSession.agent) {
+            // Delay AI response slightly to feel natural
+            setTimeout(async () => {
+              await respondToCustomerMessage(chatSessionId, messageData, io);
+            }, 1000);
+          }
         }
       } catch (error) {
         console.error('Send message error:', error);

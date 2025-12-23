@@ -11,6 +11,7 @@ const { assignAgent } = require('../services/agentAssignment');
 const { sendAIMessages } = require('../services/aiMessages');
 const { ensureDefaultPlans, formatPlanForResponse } = require('../utils/planDefaults');
 const { sendAgentAlertEmail } = require('../utils/agentAlertEmail');
+const { notifyAgentsForNewChat } = require('../services/agentNotificationService');
 
 // @route   GET /api/customer/plans
 // @desc    Get all available plans
@@ -110,6 +111,15 @@ router.post('/request-service', protect, authorize('customer'), async (req, res)
 
     // Try to assign agent
     const agent = await assignAgent(serviceId, chatSession._id);
+
+    // Notify agents about new chat (email notifications)
+    // Only notify if no agent was automatically assigned
+    if (!agent) {
+      notifyAgentsForNewChat(chatSession._id, serviceId, customer.name).catch(err => {
+        console.error('Error sending agent notifications:', err);
+        // Don't block the response if notifications fail
+      });
+    }
 
     // Send AI messages (will be handled by socket)
     // This will be triggered via socket when customer joins the chat

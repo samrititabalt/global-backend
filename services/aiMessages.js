@@ -1,65 +1,154 @@
 const Message = require('../models/Message');
 const ChatSession = require('../models/ChatSession');
+const { generateAIResponse } = require('./openaiService');
 
-const AIMessages = [
-  "Hello! Thanks for reaching out.",
-  "An agent is reviewing your request.",
-  "An agent will contact you soon."
-];
-
-const sendAIMessages = async (chatSessionId, io) => {
+/**
+ * Send initial AI greeting when customer first joins chat
+ */
+const sendInitialAIGreeting = async (chatSessionId, io) => {
   try {
-    const chatSession = await ChatSession.findById(chatSessionId);
+    const chatSession = await ChatSession.findById(chatSessionId)
+      .populate('service', 'name')
+      .populate('customer', 'name');
     
     if (!chatSession || chatSession.aiMessagesSent) {
       return;
     }
 
-    // Send AI messages with delays
-    for (let i = 0; i < AIMessages.length; i++) {
-      setTimeout(async () => {
-        // Check if agent has already sent a message
-        const agentMessage = await Message.findOne({
-          chatSession: chatSessionId,
-          senderRole: 'agent',
-          isAIMessage: false
-        });
-
-        if (agentMessage) {
-          // Agent has responded, stop sending AI messages
-          return;
-        }
-
-        const message = await Message.create({
-          chatSession: chatSessionId,
-          sender: chatSession.customer,
-          senderRole: 'system',
-          content: AIMessages[i],
-          messageType: 'system',
-          isAIMessage: true
-        });
-
-        // Emit to customer
-        io.to(`chat_${chatSessionId}`).emit('newMessage', {
-          _id: message._id,
-          chatSession: chatSessionId,
-          sender: chatSession.customer,
-          senderRole: 'system',
-          content: AIMessages[i],
-          messageType: 'system',
-          isAIMessage: true,
-          createdAt: message.createdAt
-        });
-      }, (i + 1) * 2000); // 2 seconds delay between messages
+    // Check if agent has already joined
+    if (chatSession.agent) {
+      return; // Agent already assigned, skip AI greeting
     }
+
+    const serviceName = chatSession.service?.name || 'General Support';
+    const customerName = chatSession.customer?.name || 'there';
+    
+    // Generate contextual greeting
+    const greeting = await generateAIResponse(
+      `Hello, I'm a new customer named ${customerName} and I need help with ${serviceName}.`,
+      [],
+      serviceName
+    );
+
+    // Create AI message
+    const message = await Message.create({
+      chatSession: chatSessionId,
+      sender: chatSession.customer._id, // Use customer ID as placeholder
+      senderRole: 'ai',
+      senderType: 'ai',
+      content: greeting,
+      messageType: 'text',
+      isAIMessage: true
+    });
 
     // Mark as sent
     chatSession.aiMessagesSent = true;
     await chatSession.save();
+
+    // Emit to chat room
+    const messageData = {
+      _id: message._id,
+      chatSession: chatSessionId,
+      sender: {
+        _id: 'ASKSAM_AI',
+        name: 'ASKSAM AI',
+        role: 'ai'
+      },
+      senderRole: 'ai',
+      senderType: 'ai',
+      content: greeting,
+      messageType: 'text',
+      isAIMessage: true,
+      createdAt: message.createdAt
+    };
+
+    io.to(`chat_${chatSessionId}`).emit('newMessage', messageData);
   } catch (error) {
-    console.error('Error sending AI messages:', error);
+    console.error('Error sending initial AI greeting:', error);
   }
 };
 
-module.exports = { sendAIMessages };
+/**
+ * Generate and send AI response to customer message
+ * Only responds if no agent has joined the chat yet
+ */
+const respondToCustomerMessage = async (chatSessionId, customerMessage, io) => {
+  try {
+    const chatSession = await ChatSession.findById(chatSessionId)
+      .populate('service', 'name')
+      .populate('customer', 'name');
+    
+    if (!chatSession) {
+      return;
+    }
 
+    // Don't respond if agent has already joined
+    if (chatSession.agent) {
+      return;
+    }
+
+    // Don't respond if this is not a customer message
+    if (customerMessage.senderRole !== 'customer' && customerMessage.senderType !== 'customer') {
+      return;
+    }
+
+    // Get recent chat history (last 10 messages for context)
+    const recentMessages = await Message.find({
+      chatSession: chatSessionId
+    })
+      .sort({ createdAt: -1 })
+      .limit(10)
+      .select('content senderRole senderType')
+      .lean();
+
+    // Reverse to get chronological order
+    const chatHistory = recentMessages.reverse();
+
+    const serviceName = chatSession.service?.name || 'General Support';
+    const userMessage = customerMessage.content || '';
+
+    // Generate AI response
+    const aiResponse = await generateAIResponse(
+      userMessage,
+      chatHistory,
+      serviceName
+    );
+
+    // Create AI message
+    const message = await Message.create({
+      chatSession: chatSessionId,
+      sender: chatSession.customer._id, // Use customer ID as placeholder
+      senderRole: 'ai',
+      senderType: 'ai',
+      content: aiResponse,
+      messageType: 'text',
+      isAIMessage: true
+    });
+
+    // Emit to chat room
+    const messageData = {
+      _id: message._id,
+      chatSession: chatSessionId,
+      sender: {
+        _id: 'ASKSAM_AI',
+        name: 'ASKSAM AI',
+        role: 'ai'
+      },
+      senderRole: 'ai',
+      senderType: 'ai',
+      content: aiResponse,
+      messageType: 'text',
+      isAIMessage: true,
+      createdAt: message.createdAt
+    };
+
+    io.to(`chat_${chatSessionId}`).emit('newMessage', messageData);
+  } catch (error) {
+    console.error('Error generating AI response:', error);
+  }
+};
+
+module.exports = {
+  sendInitialAIGreeting,
+  respondToCustomerMessage
+};

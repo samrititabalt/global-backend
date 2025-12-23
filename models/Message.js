@@ -13,8 +13,20 @@ const messageSchema = new mongoose.Schema({
   },
   senderRole: {
     type: String,
-    enum: ['customer', 'agent', 'admin', 'system'],
+    enum: ['customer', 'agent', 'admin', 'system', 'ai'],
     required: true
+  },
+  senderType: {
+    type: String,
+    enum: ['customer', 'agent', 'ai', 'system'],
+    default: function() {
+      // Auto-set based on senderRole if not provided
+      if (this.senderRole === 'ai') return 'ai';
+      if (this.senderRole === 'system') return 'system';
+      if (this.senderRole === 'agent') return 'agent';
+      if (this.senderRole === 'customer') return 'customer';
+      return 'customer';
+    }
   },
   content: {
     type: String
