@@ -106,33 +106,48 @@ const socketHandler = (io) => {
             isOnline: chatSession.customer.isOnline || false
           });
 
-          // Create system message when agent joins
-          const agentJoinMessage = await Message.create({
-            chatSession: chatSessionId,
-            sender: user._id,
-            senderRole: 'system',
-            senderType: 'system',
-            content: `Agent ${user.name} has joined the chat`,
-            messageType: 'system'
-          });
+          // Only create system message if agent is assigned to this chat and chat is active
+          // This prevents system messages when agents view pending chats they haven't accepted
+          if (chatSession.agent && 
+              chatSession.agent._id.toString() === user._id.toString() && 
+              chatSession.status === 'active') {
+            // Check if system message already exists to avoid duplicates
+            const existingSystemMessage = await Message.findOne({
+              chatSession: chatSessionId,
+              senderRole: 'system',
+              content: { $regex: new RegExp(`Agent ${user.name} has joined`, 'i') }
+            });
 
-          // Emit system message to chat room
-          const systemMessageData = {
-            _id: agentJoinMessage._id,
-            chatSession: chatSessionId,
-            sender: {
-              _id: 'SYSTEM',
-              name: 'System',
-              role: 'system'
-            },
-            senderRole: 'system',
-            senderType: 'system',
-            content: `Agent ${user.name} has joined the chat`,
-            messageType: 'system',
-            createdAt: agentJoinMessage.createdAt
-          };
+            if (!existingSystemMessage) {
+              // Create system message when assigned agent joins active chat
+              const agentJoinMessage = await Message.create({
+                chatSession: chatSessionId,
+                sender: user._id,
+                senderRole: 'system',
+                senderType: 'system',
+                content: `Agent ${user.name} has joined the chat`,
+                messageType: 'system'
+              });
 
-          io.to(`chat_${chatSessionId}`).emit('newMessage', systemMessageData);
+              // Emit system message to chat room
+              const systemMessageData = {
+                _id: agentJoinMessage._id,
+                chatSession: chatSessionId,
+                sender: {
+                  _id: 'SYSTEM',
+                  name: 'System',
+                  role: 'system'
+                },
+                senderRole: 'system',
+                senderType: 'system',
+                content: `Agent ${user.name} has joined the chat`,
+                messageType: 'system',
+                createdAt: agentJoinMessage.createdAt
+              };
+
+              io.to(`chat_${chatSessionId}`).emit('newMessage', systemMessageData);
+            }
+          }
         }
 
         // Send AI greeting if this is a new chat and customer is joining

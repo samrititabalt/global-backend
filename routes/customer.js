@@ -7,10 +7,8 @@ const Service = require('../models/Service');
 const ChatSession = require('../models/ChatSession');
 const Message = require('../models/Message');
 const { checkTokenBalance } = require('../services/tokenService');
-const { assignAgent } = require('../services/agentAssignment');
 const { sendAIMessages } = require('../services/aiMessages');
 const { ensureDefaultPlans, formatPlanForResponse } = require('../utils/planDefaults');
-const { sendAgentAlertEmail } = require('../utils/agentAlertEmail');
 const { notifyAgentsForNewChat } = require('../services/agentNotificationService');
 
 // @route   GET /api/customer/plans
@@ -60,66 +58,25 @@ router.post('/request-service', protect, authorize('customer'), async (req, res)
       return res.status(404).json({ message: 'Service not found' });
     }
 
-    // Check if any agents are online (for this service or any service)
-    const onlineAgents = await User.find({
-      role: 'agent',
-      isOnline: true,
-      isActive: true
-    }).select('email');
+    // Note: We no longer block chat creation if agents are offline
+    // The chat will be created as 'pending' and agents will be notified via email
+    // Agents can accept the request when they come online
 
-    // If no agents are online, send alert emails and return error
-    if (!onlineAgents || onlineAgents.length === 0) {
-      // Get all agent emails (including offline ones for notification)
-      const allAgents = await User.find({
-        role: 'agent',
-        isActive: true
-      }).select('email');
-
-      if (allAgents && allAgents.length > 0) {
-        const agentEmails = allAgents.map(agent => agent.email).filter(Boolean);
-        
-        // Get customer details with customer ID
-        const customerWithId = await User.findById(customer._id).select('name customerId');
-        
-        // Send alert emails to all agents
-        try {
-          await sendAgentAlertEmail(agentEmails, {
-            name: customerWithId.name || customer.name,
-            customerId: customerWithId.customerId || 'N/A',
-            timestamp: new Date()
-          });
-        } catch (emailError) {
-          console.error('Error sending agent alert emails:', emailError);
-          // Continue even if email fails - don't block the response
-        }
-      }
-
-      return res.status(503).json({
-        success: false,
-        message: 'All agents are currently offline. We\'ve notified the team and someone will be with you shortly.',
-        allAgentsOffline: true
-      });
-    }
-
-    // Create chat session
+    // Create chat session with 'pending' status (no agent assigned yet)
     const chatSession = await ChatSession.create({
       customer: customer._id,
       service: serviceId,
       subService: subService,
-      status: 'pending'
+      status: 'pending',
+      agent: null // Explicitly set to null - no auto-assignment
     });
 
-    // Try to assign agent
-    const agent = await assignAgent(serviceId, chatSession._id);
-
-    // Notify agents about new chat (email notifications)
-    // Only notify if no agent was automatically assigned
-    if (!agent) {
-      notifyAgentsForNewChat(chatSession._id, serviceId, customer.name).catch(err => {
-        console.error('Error sending agent notifications:', err);
-        // Don't block the response if notifications fail
-      });
-    }
+    // Always notify all agents of this service category about the new chat
+    // This happens regardless of whether agents are online or not
+    notifyAgentsForNewChat(chatSession._id, serviceId, customer.name).catch(err => {
+      console.error('Error sending agent notifications:', err);
+      // Don't block the response if notifications fail
+    });
 
     // Send AI messages (will be handled by socket)
     // This will be triggered via socket when customer joins the chat
@@ -131,10 +88,7 @@ router.post('/request-service', protect, authorize('customer'), async (req, res)
         service: service.name,
         subService: subService,
         status: chatSession.status,
-        agent: agent ? {
-          _id: agent._id,
-          name: agent.name
-        } : null
+        agent: null // No agent assigned until one accepts
       }
     });
   } catch (error) {

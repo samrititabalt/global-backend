@@ -38,11 +38,14 @@ router.get('/dashboard', protect, authorize('agent'), async (req, res) => {
     };
 
     // Get pending requests for agent's service category
-    const pendingRequests = await ChatSession.find({
-      service: agent.serviceCategory,
-      status: 'pending',
-      agent: null
-    })
+    // Only show pending requests if agent has a serviceCategory assigned
+    let pendingRequests = [];
+    if (agent.serviceCategory) {
+      pendingRequests = await ChatSession.find({
+        service: agent.serviceCategory,
+        status: 'pending',
+        agent: null
+      })
       .populate({
         path: 'customer',
         select: 'name email isOnline avatar role phone country serviceCategory',
@@ -50,6 +53,7 @@ router.get('/dashboard', protect, authorize('agent'), async (req, res) => {
       })
       .populate('service', 'name')
       .sort({ createdAt: -1 });
+    }
 
     // Get active chats
     const activeChats = await ChatSession.find({
@@ -126,9 +130,20 @@ router.post('/accept-request/:chatId', protect, authorize('agent'), async (req, 
       $addToSet: { activeChats: chatSession._id }
     });
 
+    // Create system message: Agent has joined the chat
+    const systemMessage = await Message.create({
+      chatSession: chatSession._id,
+      sender: req.user._id,
+      senderRole: 'system',
+      senderType: 'system',
+      content: `Agent ${req.user.name} has joined the chat`,
+      messageType: 'system'
+    });
+
     res.json({
       success: true,
-      chatSession
+      chatSession,
+      systemMessage
     });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
