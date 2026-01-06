@@ -137,12 +137,21 @@ const userSchema = new mongoose.Schema({
 });
 
 userSchema.pre('save', async function(next) {
-  // Generate customer ID for new customers
+  // Ensure agents and admins never have a customerId
+  if (this.role !== 'customer') {
+    this.customerId = null;
+  }
+  
+  // Generate customer ID for new customers only
   if (this.role === 'customer' && !this.customerId && this.isNew) {
     // Generate customer ID: CUST + timestamp + random 4 digits
+    // Collision probability is extremely low (1 in 10,000 per millisecond)
     const timestamp = Date.now().toString().slice(-8);
     const random = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
     this.customerId = `CUST${timestamp}${random}`;
+    
+    // If collision occurs, MongoDB will throw duplicate key error (code 11000)
+    // which will be handled by the route error handler
   }
   
   // Skip password hashing if user is OAuth-only and password is not set

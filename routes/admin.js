@@ -259,7 +259,19 @@ router.post('/agents', protect, authorize('admin'), upload.fields([{ name: 'avat
     const plainPassword = password;
 
     // Create agent (password will be hashed by pre-save hook, email will be lowercased by schema)
+    // Explicitly set customerId to null/undefined for agents to prevent any issues
     console.log(`📝 Creating agent with email: ${email}, name: ${name}, serviceCategory: ${serviceCategory}`);
+    console.log(`📝 Agent data:`, {
+      name: name.trim(),
+      email: email.toLowerCase().trim(),
+      phone: phone.trim(),
+      country: country.trim(),
+      role: 'agent',
+      serviceCategory,
+      hasPassword: !!password,
+      hasAvatar: !!avatarUrl
+    });
+    
     const agent = await User.create({
       name: name.trim(),
       email: email.toLowerCase().trim(), // Ensure lowercase and trimmed
@@ -269,7 +281,8 @@ router.post('/agents', protect, authorize('admin'), upload.fields([{ name: 'avat
       plainPassword, // Store plain text for admin viewing
       role: 'agent',
       serviceCategory,
-      avatar: avatarUrl
+      avatar: avatarUrl,
+      customerId: null // Explicitly set to null for agents to prevent customerId conflicts
     });
     console.log(`✅ Agent created successfully: ${agent._id}`);
 
@@ -295,25 +308,64 @@ router.post('/agents', protect, authorize('admin'), upload.fields([{ name: 'avat
       agent: agentWithPassword
     });
   } catch (error) {
-    console.error('❌ Error creating agent:', error);
-    console.error('Error details:', {
-      name: error.name,
-      code: error.code,
-      message: error.message,
-      keyPattern: error.keyPattern,
-      keyValue: error.keyValue
+    // Comprehensive error logging
+    console.error('❌ ========== ERROR CREATING AGENT ==========');
+    console.error('Error Name:', error.name);
+    console.error('Error Code:', error.code);
+    console.error('Error Message:', error.message);
+    
+    if (error.keyPattern) {
+      console.error('Duplicate Key Pattern:', JSON.stringify(error.keyPattern, null, 2));
+    }
+    if (error.keyValue) {
+      console.error('Duplicate Key Value:', JSON.stringify(error.keyValue, null, 2));
+    }
+    if (error.errors) {
+      console.error('Validation Errors:', JSON.stringify(error.errors, null, 2));
+    }
+    if (error.stack) {
+      console.error('Stack Trace:', error.stack);
+    }
+    console.error('Request Body:', {
+      name: req.body.name,
+      email: req.body.email,
+      phone: req.body.phone,
+      country: req.body.country,
+      serviceCategory: req.body.serviceCategory,
+      hasPassword: !!req.body.password
     });
+    console.error('Normalized Data:', {
+      name: req.body.name ? req.body.name.trim() : '',
+      email: req.body.email ? req.body.email.toLowerCase().trim() : '',
+      phone: req.body.phone ? req.body.phone.trim() : '',
+      country: req.body.country ? req.body.country.trim() : '',
+      serviceCategory: req.body.serviceCategory ? req.body.serviceCategory.trim() : ''
+    });
+    console.error('❌ ===========================================');
     
     // Handle MongoDB duplicate key error (unique constraint violation)
     if (error.code === 11000) {
-      const duplicateField = error.keyPattern ? Object.keys(error.keyPattern)[0] : 'email';
+      const duplicateField = error.keyPattern ? Object.keys(error.keyPattern)[0] : 'unknown';
       const duplicateValue = error.keyValue ? error.keyValue[duplicateField] : 'unknown';
-      console.log(`❌ Duplicate key error on field: ${duplicateField}, value: ${duplicateValue}`);
+      
+      // Provide user-friendly messages based on the duplicate field
+      let userMessage = `User already exists with this ${duplicateField}`;
+      if (duplicateField === 'email') {
+        userMessage = 'User already exists with this email address';
+      } else if (duplicateField === 'customerId') {
+        userMessage = 'A user with this customer ID already exists. This is unusual - please contact support.';
+      }
+      
+      console.error(`❌ Duplicate key error on field: ${duplicateField}, value: ${duplicateValue}`);
       return res.status(400).json({ 
-        message: `User already exists with this ${duplicateField}`,
+        message: userMessage,
         field: duplicateField,
         value: duplicateValue,
-        error: 'Duplicate entry'
+        error: 'Duplicate entry',
+        details: process.env.NODE_ENV === 'development' ? {
+          keyPattern: error.keyPattern,
+          keyValue: error.keyValue
+        } : undefined
       });
     }
     
