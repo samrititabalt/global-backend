@@ -184,8 +184,8 @@ router.delete('/plans/:id', protect, authorize('admin'), async (req, res) => {
 // @access  Private (Admin)
 router.post('/agents', protect, authorize('admin'), upload.fields([{ name: 'avatar', maxCount: 1 }]), uploadToCloudinary, [
   body('name').trim().notEmpty().withMessage('Name is required'),
-  body('email').isEmail().withMessage('Please provide a valid email'),
-  body('phone').notEmpty().withMessage('Phone number is required'),
+  body('email').normalizeEmail().isEmail().withMessage('Please provide a valid email'),
+  body('phone').trim().notEmpty().withMessage('Phone number is required'),
   body('country').trim().notEmpty().withMessage('Country is required'),
   body('serviceCategory').notEmpty().withMessage('Service category is required').isMongoId().withMessage('Invalid service category ID')
 ], async (req, res) => {
@@ -195,15 +195,45 @@ router.post('/agents', protect, authorize('admin'), upload.fields([{ name: 'avat
       return res.status(400).json({ errors: errors.array() });
     }
 
-    const { name, email, phone, country, serviceCategory } = req.body;
+    // Normalize and extract data from request body
+    const name = req.body.name ? req.body.name.trim() : '';
+    const email = req.body.email ? req.body.email.toLowerCase().trim() : '';
+    const phone = req.body.phone ? req.body.phone.trim() : '';
+    const country = req.body.country ? req.body.country.trim() : '';
+    const serviceCategory = req.body.serviceCategory ? req.body.serviceCategory.trim() : '';
 
-    // Check if user already exists
-    const existingUser = await User.findOne({ email });
-    if (existingUser) {
-      return res.status(400).json({ message: 'User already exists with this email' });
+    // Validate normalized fields
+    if (!name) {
+      return res.status(400).json({ message: 'Name is required' });
+    }
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({ message: 'Please provide a valid email' });
+    }
+    if (!phone) {
+      return res.status(400).json({ message: 'Phone number is required' });
+    }
+    if (!country) {
+      return res.status(400).json({ message: 'Country is required' });
+    }
+    if (!serviceCategory) {
+      return res.status(400).json({ message: 'Service category is required' });
     }
 
-    // Verify service category exists
+    // Check if user already exists (using normalized lowercase email)
+    const existingUser = await User.findOne({ email: email.toLowerCase() });
+    if (existingUser) {
+      console.log(`❌ Email already exists: ${email} (found user: ${existingUser._id}, role: ${existingUser.role})`);
+      return res.status(400).json({ 
+        message: 'User already exists with this email',
+        email: email
+      });
+    }
+
+    // Verify service category exists and is valid ObjectId
+    if (!require('mongoose').Types.ObjectId.isValid(serviceCategory)) {
+      return res.status(400).json({ message: 'Invalid service category ID format' });
+    }
+    
     const service = await Service.findById(serviceCategory);
     if (!service) {
       return res.status(400).json({ message: 'Service category not found' });
@@ -228,18 +258,20 @@ router.post('/agents', protect, authorize('admin'), upload.fields([{ name: 'avat
     // Store plain password for admin viewing
     const plainPassword = password;
 
-    // Create agent (password will be hashed by pre-save hook)
+    // Create agent (password will be hashed by pre-save hook, email will be lowercased by schema)
+    console.log(`📝 Creating agent with email: ${email}, name: ${name}, serviceCategory: ${serviceCategory}`);
     const agent = await User.create({
-      name,
-      email,
-      phone,
-      country,
+      name: name.trim(),
+      email: email.toLowerCase().trim(), // Ensure lowercase and trimmed
+      phone: phone.trim(),
+      country: country.trim(),
       password,
       plainPassword, // Store plain text for admin viewing
       role: 'agent',
       serviceCategory,
       avatar: avatarUrl
     });
+    console.log(`✅ Agent created successfully: ${agent._id}`);
 
     // Send credentials email (only if password was auto-generated)
     if (!req.body.password || req.body.password.trim() === '') {
@@ -263,25 +295,56 @@ router.post('/agents', protect, authorize('admin'), upload.fields([{ name: 'avat
       agent: agentWithPassword
     });
   } catch (error) {
-    console.error('Error creating agent:', error);
-    // Handle MongoDB duplicate key error
+    console.error('❌ Error creating agent:', error);
+    console.error('Error details:', {
+      name: error.name,
+      code: error.code,
+      message: error.message,
+      keyPattern: error.keyPattern,
+      keyValue: error.keyValue
+    });
+    
+    // Handle MongoDB duplicate key error (unique constraint violation)
     if (error.code === 11000) {
+      const duplicateField = error.keyPattern ? Object.keys(error.keyPattern)[0] : 'email';
+      const duplicateValue = error.keyValue ? error.keyValue[duplicateField] : 'unknown';
+      console.log(`❌ Duplicate key error on field: ${duplicateField}, value: ${duplicateValue}`);
       return res.status(400).json({ 
-        message: 'User already exists with this email',
-        error: 'Duplicate email'
+        message: `User already exists with this ${duplicateField}`,
+        field: duplicateField,
+        value: duplicateValue,
+        error: 'Duplicate entry'
       });
     }
+    
     // Handle validation errors
     if (error.name === 'ValidationError') {
+      const validationErrors = Object.values(error.errors).map(err => ({
+        field: err.path,
+        message: err.message
+      }));
       return res.status(400).json({ 
         message: 'Validation error',
-        error: error.message
+        errors: validationErrors
       });
     }
+    
+    // Handle cast errors (invalid ObjectId, etc.)
+    if (error.name === 'CastError') {
+      return res.status(400).json({ 
+        message: `Invalid ${error.path}: ${error.value}`,
+        error: 'Invalid data format'
+      });
+    }
+    
     res.status(500).json({ 
       message: 'Server error', 
       error: error.message,
-      ...(process.env.NODE_ENV === 'development' && { stack: error.stack })
+      ...(process.env.NODE_ENV === 'development' && { 
+        stack: error.stack,
+        name: error.name,
+        code: error.code
+      })
     });
   }
 });
@@ -307,17 +370,25 @@ router.get('/agents', protect, authorize('admin'), async (req, res) => {
 // @access  Private (Admin)
 router.put('/agents/:id', protect, authorize('admin'), upload.fields([{ name: 'avatar', maxCount: 1 }]), uploadToCloudinary, async (req, res) => {
   try {
-    const { name, email, phone, country, serviceCategory, isActive, password } = req.body;
+    // Normalize input data
+    const name = req.body.name ? req.body.name.trim() : undefined;
+    const email = req.body.email ? req.body.email.toLowerCase().trim() : undefined;
+    const phone = req.body.phone ? req.body.phone.trim() : undefined;
+    const country = req.body.country ? req.body.country.trim() : undefined;
+    const serviceCategory = req.body.serviceCategory ? req.body.serviceCategory.trim() : undefined;
+    const isActive = req.body.isActive !== undefined ? req.body.isActive : undefined;
+    const password = req.body.password ? req.body.password.trim() : undefined;
 
     const agent = await User.findById(req.params.id).select('+plainPassword');
     if (!agent || agent.role !== 'agent') {
       return res.status(404).json({ message: 'Agent not found' });
     }
 
-    // Check if email is being changed and if it's already taken
-    if (email && email !== agent.email) {
-      const existingUser = await User.findOne({ email });
-      if (existingUser) {
+    // Check if email is being changed and if it's already taken (normalize for comparison)
+    if (email && email.toLowerCase() !== agent.email.toLowerCase()) {
+      const normalizedEmail = email.toLowerCase().trim();
+      const existingUser = await User.findOne({ email: normalizedEmail });
+      if (existingUser && existingUser._id.toString() !== agent._id.toString()) {
         return res.status(400).json({ message: 'Email already exists' });
       }
     }
@@ -331,12 +402,23 @@ router.put('/agents/:id', protect, authorize('admin'), upload.fields([{ name: 'a
       }
     }
 
+    // Verify service category if provided
+    if (serviceCategory) {
+      if (!require('mongoose').Types.ObjectId.isValid(serviceCategory)) {
+        return res.status(400).json({ message: 'Invalid service category ID format' });
+      }
+      const service = await Service.findById(serviceCategory);
+      if (!service) {
+        return res.status(400).json({ message: 'Service category not found' });
+      }
+    }
+
     // Update agent
     const updateData = {
-      ...(name && { name }),
-      ...(email && { email }),
-      ...(phone && { phone }),
-      ...(country && { country }),
+      ...(name && { name: name.trim() }),
+      ...(email && { email: email.toLowerCase().trim() }),
+      ...(phone && { phone: phone.trim() }),
+      ...(country && { country: country.trim() }),
       ...(serviceCategory && { serviceCategory }),
       ...(isActive !== undefined && { isActive }),
       ...(avatarUrl && { avatar: avatarUrl })
