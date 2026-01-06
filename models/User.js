@@ -145,10 +145,23 @@ const userSchema = new mongoose.Schema({
 userSchema.pre('save', async function(next) {
   // CRITICAL: Ensure agents and admins NEVER have a customerId
   // This prevents duplicate key errors on customerId field
+  // For sparse unique indexes, we need to completely unset the field, not set to null
   if (this.role !== 'customer') {
-    // Explicitly set to null to ensure it's not in the document
-    // Using null instead of undefined so MongoDB knows to clear the field
-    this.customerId = null;
+    // Use Mongoose's set with undefined to properly unset the field
+    // This ensures the field is not included in the document at all
+    this.set('customerId', undefined, { strict: false });
+    
+    // Also use $unset for MongoDB operations
+    if (!this.$unset) {
+      this.$unset = {};
+    }
+    this.$unset.customerId = '';
+    
+    // Log if customerId was present (shouldn't happen, but helps debug)
+    const existingCustomerId = this.get('customerId');
+    if (existingCustomerId) {
+      console.warn(`⚠️ Warning: Non-customer ${this._id} (role: ${this.role}) had customerId: ${existingCustomerId}. Unsetting it.`);
+    }
   }
   
   // Generate customer ID for new customers only

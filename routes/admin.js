@@ -309,7 +309,9 @@ router.post('/agents', protect, authorize('admin'), upload.fields([{ name: 'avat
       hasAvatar: !!avatarUrl
     });
     
-    const agent = await User.create({
+    // Create agent - DO NOT include customerId field at all for agents
+    // The pre-save hook will handle ensuring it's not set
+    const agentData = {
       name: name.trim(),
       email: email.toLowerCase().trim(), // Ensure lowercase and trimmed
       phone: phone.trim(),
@@ -319,9 +321,33 @@ router.post('/agents', protect, authorize('admin'), upload.fields([{ name: 'avat
       role: 'agent',
       serviceCategory: uniqueServiceIds[0] || null, // Keep for backward compatibility
       serviceCategories: uniqueServiceIds, // New array field
-      avatar: avatarUrl,
-      customerId: null // Explicitly set to null for agents to prevent customerId conflicts
+      avatar: avatarUrl
+      // Explicitly DO NOT include customerId - let the pre-save hook handle it
+    };
+    
+    console.log('📝 Creating agent with data (customerId excluded):', {
+      ...agentData,
+      password: '[HIDDEN]',
+      plainPassword: '[HIDDEN]'
     });
+    
+    // Check for any existing agents with customerId (shouldn't happen, but helps debug)
+    const agentsWithCustomerId = await User.find({ 
+      role: 'agent', 
+      customerId: { $exists: true, $ne: null } 
+    }).select('_id name email customerId');
+    
+    if (agentsWithCustomerId.length > 0) {
+      console.warn(`⚠️ Found ${agentsWithCustomerId.length} existing agents with customerId:`, 
+        agentsWithCustomerId.map(a => ({ id: a._id, name: a.name, customerId: a.customerId }))
+      );
+    }
+    
+    // Create agent using new User() and save() for better control
+    const agent = new User(agentData);
+    // Explicitly ensure customerId is not set
+    agent.customerId = undefined;
+    await agent.save();
     console.log(`✅ Agent created successfully: ${agent._id}`);
 
     // Send credentials email (only if password was auto-generated)
