@@ -187,7 +187,13 @@ router.post('/agents', protect, authorize('admin'), upload.fields([{ name: 'avat
   body('email').normalizeEmail().isEmail().withMessage('Please provide a valid email'),
   body('phone').trim().notEmpty().withMessage('Phone number is required'),
   body('country').trim().notEmpty().withMessage('Country is required'),
-  body('serviceCategory').notEmpty().withMessage('Service category is required').isMongoId().withMessage('Invalid service category ID')
+  body('serviceCategories').custom((value) => {
+    // Accept either single serviceCategory (for backward compatibility) or array of serviceCategories
+    if (!value || (Array.isArray(value) && value.length === 0)) {
+      throw new Error('At least one service category is required');
+    }
+    return true;
+  })
 ], async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -200,7 +206,30 @@ router.post('/agents', protect, authorize('admin'), upload.fields([{ name: 'avat
     const email = req.body.email ? req.body.email.toLowerCase().trim() : '';
     const phone = req.body.phone ? req.body.phone.trim() : '';
     const country = req.body.country ? req.body.country.trim() : '';
-    const serviceCategory = req.body.serviceCategory ? req.body.serviceCategory.trim() : '';
+    
+    // Handle both single serviceCategory (backward compatibility) and array of serviceCategories
+    // FormData sends arrays as multiple fields with the same name, which Express parses as array or string
+    let serviceCategories = [];
+    if (req.body.serviceCategories) {
+      // If it's already an array, use it directly
+      if (Array.isArray(req.body.serviceCategories)) {
+        serviceCategories = req.body.serviceCategories.map(id => String(id).trim()).filter(id => id !== '');
+      } else {
+        // If it's a single value (string), convert to array
+        const singleId = String(req.body.serviceCategories).trim();
+        if (singleId) {
+          serviceCategories = [singleId];
+        }
+      }
+    } else if (req.body.serviceCategory) {
+      // Backward compatibility: support old single serviceCategory field
+      const singleId = String(req.body.serviceCategory).trim();
+      if (singleId) {
+        serviceCategories = [singleId];
+      }
+    }
+    
+    console.log('📋 Service categories received:', serviceCategories);
 
     // Validate normalized fields
     if (!name) {
@@ -215,8 +244,8 @@ router.post('/agents', protect, authorize('admin'), upload.fields([{ name: 'avat
     if (!country) {
       return res.status(400).json({ message: 'Country is required' });
     }
-    if (!serviceCategory) {
-      return res.status(400).json({ message: 'Service category is required' });
+    if (!serviceCategories || serviceCategories.length === 0) {
+      return res.status(400).json({ message: 'At least one service category is required' });
     }
 
     // Check if user already exists (using normalized lowercase email)
@@ -229,15 +258,23 @@ router.post('/agents', protect, authorize('admin'), upload.fields([{ name: 'avat
       });
     }
 
-    // Verify service category exists and is valid ObjectId
-    if (!require('mongoose').Types.ObjectId.isValid(serviceCategory)) {
-      return res.status(400).json({ message: 'Invalid service category ID format' });
+    // Validate and verify all service categories exist
+    const validServiceIds = [];
+    for (const serviceId of serviceCategories) {
+      const trimmedId = serviceId.trim();
+      if (!require('mongoose').Types.ObjectId.isValid(trimmedId)) {
+        return res.status(400).json({ message: `Invalid service category ID format: ${trimmedId}` });
+      }
+      
+      const service = await Service.findById(trimmedId);
+      if (!service) {
+        return res.status(400).json({ message: `Service category not found: ${trimmedId}` });
+      }
+      validServiceIds.push(trimmedId);
     }
     
-    const service = await Service.findById(serviceCategory);
-    if (!service) {
-      return res.status(400).json({ message: 'Service category not found' });
-    }
+    // Remove duplicates
+    const uniqueServiceIds = [...new Set(validServiceIds)];
 
     // Get avatar URL if uploaded
     let avatarUrl = null;
@@ -259,15 +296,15 @@ router.post('/agents', protect, authorize('admin'), upload.fields([{ name: 'avat
     const plainPassword = password;
 
     // Create agent (password will be hashed by pre-save hook, email will be lowercased by schema)
-    // Explicitly set customerId to null/undefined for agents to prevent any issues
-    console.log(`📝 Creating agent with email: ${email}, name: ${name}, serviceCategory: ${serviceCategory}`);
+    // Explicitly set customerId to null for agents to prevent any issues
+    console.log(`📝 Creating agent with email: ${email}, name: ${name}, serviceCategories: ${uniqueServiceIds.join(', ')}`);
     console.log(`📝 Agent data:`, {
       name: name.trim(),
       email: email.toLowerCase().trim(),
       phone: phone.trim(),
       country: country.trim(),
       role: 'agent',
-      serviceCategory,
+      serviceCategories: uniqueServiceIds,
       hasPassword: !!password,
       hasAvatar: !!avatarUrl
     });
@@ -280,7 +317,8 @@ router.post('/agents', protect, authorize('admin'), upload.fields([{ name: 'avat
       password,
       plainPassword, // Store plain text for admin viewing
       role: 'agent',
-      serviceCategory,
+      serviceCategory: uniqueServiceIds[0] || null, // Keep for backward compatibility
+      serviceCategories: uniqueServiceIds, // New array field
       avatar: avatarUrl,
       customerId: null // Explicitly set to null for agents to prevent customerId conflicts
     });
@@ -301,7 +339,8 @@ router.post('/agents', protect, authorize('admin'), upload.fields([{ name: 'avat
     // Fetch agent with plainPassword for response
     const agentWithPassword = await User.findById(agent._id)
       .select('+plainPassword')
-      .populate('serviceCategory', 'name');
+      .populate('serviceCategory', 'name')
+      .populate('serviceCategories', 'name');
 
     res.status(201).json({
       success: true,
@@ -339,7 +378,8 @@ router.post('/agents', protect, authorize('admin'), upload.fields([{ name: 'avat
       email: req.body.email ? req.body.email.toLowerCase().trim() : '',
       phone: req.body.phone ? req.body.phone.trim() : '',
       country: req.body.country ? req.body.country.trim() : '',
-      serviceCategory: req.body.serviceCategory ? req.body.serviceCategory.trim() : ''
+      serviceCategory: req.body.serviceCategory || 'N/A',
+      serviceCategories: req.body.serviceCategories || 'N/A'
     });
     console.error('❌ ===========================================');
     
@@ -408,7 +448,8 @@ router.get('/agents', protect, authorize('admin'), async (req, res) => {
   try {
     const agents = await User.find({ role: 'agent' })
       .select('+plainPassword') // Include plainPassword field
-      .populate('serviceCategory', 'name')
+      .populate('serviceCategory', 'name') // Backward compatibility
+      .populate('serviceCategories', 'name') // New multiple categories
       .sort({ createdAt: -1 });
 
     res.json({ success: true, agents });
@@ -427,9 +468,23 @@ router.put('/agents/:id', protect, authorize('admin'), upload.fields([{ name: 'a
     const email = req.body.email ? req.body.email.toLowerCase().trim() : undefined;
     const phone = req.body.phone ? req.body.phone.trim() : undefined;
     const country = req.body.country ? req.body.country.trim() : undefined;
-    const serviceCategory = req.body.serviceCategory ? req.body.serviceCategory.trim() : undefined;
     const isActive = req.body.isActive !== undefined ? req.body.isActive : undefined;
     const password = req.body.password ? req.body.password.trim() : undefined;
+
+    // Handle both single serviceCategory (backward compatibility) and array of serviceCategories
+    let serviceCategories = undefined;
+    if (req.body.serviceCategories) {
+      // If it's an array, use it directly
+      if (Array.isArray(req.body.serviceCategories)) {
+        serviceCategories = req.body.serviceCategories.filter(id => id && id.trim() !== '');
+      } else {
+        // If it's a single value, convert to array
+        serviceCategories = [req.body.serviceCategories].filter(id => id && id.trim() !== '');
+      }
+    } else if (req.body.serviceCategory) {
+      // Backward compatibility: support old single serviceCategory field
+      serviceCategories = [req.body.serviceCategory].filter(id => id && id.trim() !== '');
+    }
 
     const agent = await User.findById(req.params.id).select('+plainPassword');
     if (!agent || agent.role !== 'agent') {
@@ -454,15 +509,24 @@ router.put('/agents/:id', protect, authorize('admin'), upload.fields([{ name: 'a
       }
     }
 
-    // Verify service category if provided
-    if (serviceCategory) {
-      if (!require('mongoose').Types.ObjectId.isValid(serviceCategory)) {
-        return res.status(400).json({ message: 'Invalid service category ID format' });
+    // Validate and verify all service categories if provided
+    let validServiceIds = undefined;
+    if (serviceCategories && serviceCategories.length > 0) {
+      validServiceIds = [];
+      for (const serviceId of serviceCategories) {
+        const trimmedId = serviceId.trim();
+        if (!require('mongoose').Types.ObjectId.isValid(trimmedId)) {
+          return res.status(400).json({ message: `Invalid service category ID format: ${trimmedId}` });
+        }
+        
+        const service = await Service.findById(trimmedId);
+        if (!service) {
+          return res.status(400).json({ message: `Service category not found: ${trimmedId}` });
+        }
+        validServiceIds.push(trimmedId);
       }
-      const service = await Service.findById(serviceCategory);
-      if (!service) {
-        return res.status(400).json({ message: 'Service category not found' });
-      }
+      // Remove duplicates
+      validServiceIds = [...new Set(validServiceIds)];
     }
 
     // Update agent
@@ -471,10 +535,15 @@ router.put('/agents/:id', protect, authorize('admin'), upload.fields([{ name: 'a
       ...(email && { email: email.toLowerCase().trim() }),
       ...(phone && { phone: phone.trim() }),
       ...(country && { country: country.trim() }),
-      ...(serviceCategory && { serviceCategory }),
       ...(isActive !== undefined && { isActive }),
       ...(avatarUrl && { avatar: avatarUrl })
     };
+
+    // Update service categories if provided
+    if (validServiceIds && validServiceIds.length > 0) {
+      updateData.serviceCategory = validServiceIds[0]; // Keep first for backward compatibility
+      updateData.serviceCategories = validServiceIds; // New array field
+    }
 
     // Handle password update if provided
     if (password) {
@@ -488,7 +557,8 @@ router.put('/agents/:id', protect, authorize('admin'), upload.fields([{ name: 'a
       { new: true, runValidators: true }
     )
     .select('+plainPassword')
-    .populate('serviceCategory', 'name');
+    .populate('serviceCategory', 'name')
+    .populate('serviceCategories', 'name');
 
     res.json({ success: true, agent: updatedAgent });
   } catch (error) {

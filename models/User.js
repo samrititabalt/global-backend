@@ -77,11 +77,17 @@ const userSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Plan'
   },
-  // Agent specific fields
+  // Agent specific fields - support multiple service categories
   serviceCategory: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Service'
+    ref: 'Service',
+    default: null
   },
+  // New field for multiple service categories (agents can have multiple)
+  serviceCategories: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Service'
+  }],
   isOnline: {
     type: Boolean,
     default: false
@@ -137,8 +143,11 @@ const userSchema = new mongoose.Schema({
 });
 
 userSchema.pre('save', async function(next) {
-  // Ensure agents and admins never have a customerId
+  // CRITICAL: Ensure agents and admins NEVER have a customerId
+  // This prevents duplicate key errors on customerId field
   if (this.role !== 'customer') {
+    // Explicitly set to null to ensure it's not in the document
+    // Using null instead of undefined so MongoDB knows to clear the field
     this.customerId = null;
   }
   
@@ -152,6 +161,11 @@ userSchema.pre('save', async function(next) {
     
     // If collision occurs, MongoDB will throw duplicate key error (code 11000)
     // which will be handled by the route error handler
+  }
+  
+  // For agents: migrate single serviceCategory to serviceCategories array if needed
+  if (this.role === 'agent' && this.serviceCategory && (!this.serviceCategories || this.serviceCategories.length === 0)) {
+    this.serviceCategories = [this.serviceCategory];
   }
   
   // Skip password hashing if user is OAuth-only and password is not set
