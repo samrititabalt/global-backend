@@ -187,7 +187,7 @@ router.post('/agents', protect, authorize('admin'), upload.fields([{ name: 'avat
   body('email').isEmail().withMessage('Please provide a valid email'),
   body('phone').notEmpty().withMessage('Phone number is required'),
   body('country').trim().notEmpty().withMessage('Country is required'),
-  body('serviceCategory').notEmpty().withMessage('Service category is required')
+  body('serviceCategory').notEmpty().withMessage('Service category is required').isMongoId().withMessage('Invalid service category ID')
 ], async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -203,6 +203,12 @@ router.post('/agents', protect, authorize('admin'), upload.fields([{ name: 'avat
       return res.status(400).json({ message: 'User already exists with this email' });
     }
 
+    // Verify service category exists
+    const service = await Service.findById(serviceCategory);
+    if (!service) {
+      return res.status(400).json({ message: 'Service category not found' });
+    }
+
     // Get avatar URL if uploaded
     let avatarUrl = null;
     if (req.uploadedFiles && req.uploadedFiles.length > 0) {
@@ -214,7 +220,7 @@ router.post('/agents', protect, authorize('admin'), upload.fields([{ name: 'avat
 
     // Get password from request or generate one
     let password = req.body.password;
-    if (!password) {
+    if (!password || password.trim() === '') {
       // If no password provided, generate one
       password = generatePassword();
     }
@@ -236,7 +242,7 @@ router.post('/agents', protect, authorize('admin'), upload.fields([{ name: 'avat
     });
 
     // Send credentials email (only if password was auto-generated)
-    if (!req.body.password) {
+    if (!req.body.password || req.body.password.trim() === '') {
       try {
         console.log(`📧 Sending agent credentials email to ${email}...`);
         await sendCredentialsEmail(email, plainPassword, 'agent', name);
@@ -257,7 +263,26 @@ router.post('/agents', protect, authorize('admin'), upload.fields([{ name: 'avat
       agent: agentWithPassword
     });
   } catch (error) {
-    res.status(500).json({ message: 'Server error', error: error.message });
+    console.error('Error creating agent:', error);
+    // Handle MongoDB duplicate key error
+    if (error.code === 11000) {
+      return res.status(400).json({ 
+        message: 'User already exists with this email',
+        error: 'Duplicate email'
+      });
+    }
+    // Handle validation errors
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({ 
+        message: 'Validation error',
+        error: error.message
+      });
+    }
+    res.status(500).json({ 
+      message: 'Server error', 
+      error: error.message,
+      ...(process.env.NODE_ENV === 'development' && { stack: error.stack })
+    });
   }
 });
 
