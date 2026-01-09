@@ -19,9 +19,9 @@ const OBJECTIVE_MAP = {
 };
 
 const OPTIMIZATION_MAP = {
-  traffic: 'LINK_CLICKS',
-  leads: 'LEAD_GENERATION',
-  sales: 'REACH',
+  traffic: 'OUTCOME_TRAFFIC',
+  leads: 'OUTCOME_LEADS',
+  sales: 'OUTCOME_SALES',
 };
 
 const buildStateToken = (userId) => {
@@ -213,6 +213,7 @@ const launchQuickCampaign = async ({
     daily_budget: toMinorUnits(dailyBudget),
     billing_event: 'IMPRESSIONS',
     optimization_goal: OPTIMIZATION_MAP[goal] || OPTIMIZATION_MAP.traffic,
+    destination_type: 'WEBSITE',
     targeting: {
       geo_locations: {
         countries: ['GB'],
