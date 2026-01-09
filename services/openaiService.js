@@ -1,10 +1,10 @@
-const axios = require('axios');
+const OpenAI = require('openai');
 
 const SERVICE_PROMPTS = {
   medical: `You are SamAI, a helpful medical assistant for UK Tabalt. Provide professional, empathetic, and accurate medical guidance while using a warm human tone. Always remind users to consult with healthcare professionals for serious concerns.`,
   legal: `You are SamAI, a knowledgeable legal assistant for UK Tabalt. Provide general legal information and guidance in plain English. Always remind users this isn't formal legal advice and to consult a qualified solicitor for specific matters.`,
   technical: `You are SamAI, a technical support specialist. Help users troubleshoot issues, explain concepts clearly, and provide step-by-step guidance. Be patient, friendly, and solution-oriented.`,
-  default: `You are SamAI, a friendly AI concierge for UK Tabalt. Respond like a caring teammate: warm, concise, and proactive. Reference the selected service category to keep the conversation contextual, and let users know a human agent will join shortly.`
+  default: `You are SamAI, a friendly AI concierge for UK Tabalt. Respond like a caring teammate: warm, concise, proactive, and solution-focused. Reference the selected service category to keep the conversation contextual, and share actionable steps before a human specialist joins.`
 };
 
 const detectServiceCategory = (serviceName = '') => {
@@ -16,104 +16,122 @@ const detectServiceCategory = (serviceName = '') => {
   if (normalizedName.includes('legal') || normalizedName.includes('law') || normalizedName.includes('attorney')) {
     return 'legal';
   }
-  if (normalizedName.includes('technical') || normalizedName.includes('tech') || normalizedName.includes('support') || normalizedName.includes('it')) {
+  if (
+    normalizedName.includes('technical') ||
+    normalizedName.includes('tech') ||
+    normalizedName.includes('support') ||
+    normalizedName.includes('it')
+  ) {
     return 'technical';
   }
 
   return 'default';
 };
 
-/**
- * Get service-specific system prompt for ChatGPT
- */
 const getServicePrompt = (serviceName) => {
   const category = detectServiceCategory(serviceName);
   return SERVICE_PROMPTS[category];
 };
 
-/**
- * Generate AI response using OpenAI API
- */
-const generateAIResponse = async (userMessage, chatHistory, serviceName) => {
-  try {
-    const apiKey = process.env.OPENAI_API_KEY;
-    
-    if (!apiKey) {
-      console.warn('OpenAI API key not found. Using fallback response.');
-      return getFallbackResponse(userMessage, serviceName);
-    }
+const buildChatMessages = (systemPrompt, chatHistory = [], userMessage) => {
+  const history = chatHistory
+    .map((msg) => ({
+      role: msg.senderType === 'customer' ? 'user' : 'assistant',
+      content: msg.content || ''
+    }))
+    .filter((msg) => !!msg.content);
 
-    const systemPrompt = getServicePrompt(serviceName);
-    
-    // Build conversation history
-    const messages = [
-      { role: 'system', content: systemPrompt },
-      ...chatHistory.map(msg => ({
-        role: msg.senderType === 'customer' ? 'user' : 'assistant',
-        content: msg.content || ''
-      })),
-      { role: 'user', content: userMessage }
-    ];
-
-    const response = await axios.post(
-      'https://api.openai.com/v1/chat/completions',
-      {
-        model: process.env.OPENAI_MODEL || 'gpt-3.5-turbo',
-        messages: messages,
-        max_tokens: 500,
-        temperature: 0.7
-      },
-      {
-        headers: {
-          'Authorization': `Bearer ${apiKey}`,
-          'Content-Type': 'application/json'
-        }
-      }
-    );
-
-    if (response.data && response.data.choices && response.data.choices[0]) {
-      return response.data.choices[0].message.content.trim();
-    }
-
-    return getFallbackResponse(userMessage, serviceName);
-  } catch (error) {
-    console.error('OpenAI API error:', error.response?.data || error.message);
-    return getFallbackResponse(userMessage, serviceName);
-  }
+  return [
+    { role: 'system', content: systemPrompt },
+    ...history,
+    { role: 'user', content: userMessage }
+  ];
 };
 
-/**
- * Condense a user message so fallback replies feel contextual.
- */
+const numberFromEnv = (value, fallback) => {
+  if (value === undefined) return fallback;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+let openAIClient = null;
+const getOpenAIClient = () => {
+  if (!process.env.OPENAI_API_KEY) {
+    return null;
+  }
+
+  if (!openAIClient) {
+    openAIClient = new OpenAI({
+      apiKey: process.env.OPENAI_API_KEY,
+      baseURL: process.env.OPENAI_BASE_URL || undefined,
+      organization: process.env.OPENAI_ORG || process.env.OPENAI_ORGANIZATION || undefined,
+      project: process.env.OPENAI_PROJECT || undefined
+    });
+  }
+
+  return openAIClient;
+};
+
 const summarizeUserMessage = (message) => {
   if (!message || typeof message !== 'string') {
-    return 'this request';
+    return 'your request';
   }
 
   const condensed = message.replace(/\s+/g, ' ').trim();
   if (!condensed) {
-    return 'this request';
+    return 'your request';
   }
 
-  return condensed.length > 200 ? `${condensed.slice(0, 200)}...` : condensed;
+  return condensed.length > 220 ? `${condensed.slice(0, 220)}...` : condensed;
 };
 
-/**
- * Fallback response when OpenAI is unavailable
- */
 const getFallbackResponse = (userMessage, serviceName) => {
   const category = detectServiceCategory(serviceName);
   const topic = summarizeUserMessage(userMessage);
-  const quotedTopic = topic === 'this request' ? topic : `“${topic}”`;
 
   const responses = {
-    medical: `I understand you're dealing with ${quotedTopic}. Here's an immediate plan: I'll capture key symptoms, duration, and any medications so our healthcare specialist can step in with precise guidance. Please let me know anything that feels urgent, plus any red-flag symptoms you're experiencing. A licensed clinician will join shortly, but I'm staying with you meanwhile.`,
-    legal: `Thanks for outlining ${quotedTopic}. I'll organize the important facts—jurisdiction, deadlines, paperwork on hand, and desired outcomes—so our legal specialist can respond efficiently. Could you share any relevant contracts or previous correspondence while I keep the conversation moving?`,
-    technical: `Got it—you're working on ${quotedTopic}. Here's how we can move fast: I'll log your current setup, desired result, constraints, and what you've tried so far. If you can add details like budget, hardware, or error codes, I can prepare troubleshooting steps before the technical agent joins.`,
-    default: `Appreciate the detail about ${quotedTopic}. I'll map out the goal, timeline, and success criteria so the right teammate can jump in ready with next steps. Feel free to add any must-haves or blockers—I'll keep everything organized until the specialist arrives.`
+    medical: `Let's get you answers around ${topic}. Start by sharing symptoms, duration, existing conditions, and medications. I can outline possible causes and steps to monitor while we connect you with a licensed clinician.`,
+    legal: `Here's a smart way to tackle ${topic}: note the jurisdiction, parties involved, deadlines, and any paperwork you have. I can help you organize the facts and draft the next steps before a solicitor joins.`,
+    technical: `For ${topic}, let's pin down the platform, hardware, software versions, and the exact behaviour you're seeing. I'll walk you through immediate troubleshooting and ensure a clean hand-off if we need a specialist.`,
+    default: `Thanks for the details on ${topic}. I'll break it into goals, constraints, and next actions so you get an actionable plan right away. Share anything that's a must-have or blocker and I'll keep iterating with you.`
   };
 
   return responses[category] || responses.default;
+};
+
+const generateAIResponse = async (userMessage, chatHistory, serviceName) => {
+  const client = getOpenAIClient();
+
+  if (!client) {
+    console.warn('SamAI warning: OPENAI_API_KEY is missing. Falling back to scripted response.');
+    return getFallbackResponse(userMessage, serviceName);
+  }
+
+  try {
+    const systemPrompt = getServicePrompt(serviceName);
+    const messages = buildChatMessages(systemPrompt, chatHistory, userMessage);
+    const completion = await client.chat.completions.create({
+      model: process.env.OPENAI_MODEL || 'gpt-3.5-turbo',
+      messages,
+      temperature: numberFromEnv(process.env.OPENAI_TEMPERATURE, 0.7),
+      top_p: numberFromEnv(process.env.OPENAI_TOP_P, 0.9),
+      presence_penalty: numberFromEnv(process.env.OPENAI_PRESENCE_PENALTY, 0.1),
+      frequency_penalty: numberFromEnv(process.env.OPENAI_FREQUENCY_PENALTY, 0),
+      max_tokens: numberFromEnv(process.env.OPENAI_MAX_TOKENS, 500)
+    });
+
+    const content = completion.choices?.[0]?.message?.content?.trim();
+    if (content) {
+      return content;
+    }
+
+    console.warn('SamAI warning: OpenAI returned an empty completion. Using fallback response.');
+    return getFallbackResponse(userMessage, serviceName);
+  } catch (error) {
+    const errorMessage = error?.response?.data || error?.message || error;
+    console.error('OpenAI API error:', errorMessage);
+    return getFallbackResponse(userMessage, serviceName);
+  }
 };
 
 module.exports = {
