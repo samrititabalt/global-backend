@@ -5,6 +5,8 @@ const { upload, uploadToCloudinary } = require('../middleware/cloudinaryUpload')
 const Message = require('../models/Message');
 const ChatSession = require('../models/ChatSession');
 const { deductToken, checkTokenBalance } = require('../services/tokenService');
+const { respondToCustomerMessage } = require('../services/aiMessages');
+const { mapMessagesForSamAI } = require('../utils/samAi');
 
 // @route   POST /api/chat/message
 // @desc    Send a text message
@@ -71,6 +73,14 @@ router.post('/message', protect, upload.none(), async (req, res) => {
       .populate('sender', 'name email avatar role')
       .populate('replyTo', 'content messageType attachments fileUrl fileName sender')
       .populate('replyTo.sender', 'name avatar');
+
+    const io = req.app.get('io');
+    
+    if (sender.role === 'customer' && io) {
+      respondToCustomerMessage(chatSessionId, populatedMessage, io).catch(err => {
+        console.error('Error triggering SamAI response (REST message):', err);
+      });
+    }
 
     res.json({ success: true, message: populatedMessage });
   } catch (error) {
@@ -176,6 +186,12 @@ router.post('/upload', protect, upload.fields([
       io.to(`chat_${chatSessionId}`).emit('newMessage', populatedMessage);
     }
 
+    if (sender.role === 'customer' && io) {
+      respondToCustomerMessage(chatSessionId, populatedMessage, io).catch(err => {
+        console.error('Error triggering SamAI response (upload):', err);
+      });
+    }
+
     res.json({ success: true, message: populatedMessage });
   } catch (error) {
     console.error('Upload error:', error);
@@ -202,13 +218,13 @@ router.get('/sessions/:id/messages', protect, async (req, res) => {
       return res.status(403).json({ message: 'Unauthorized' });
     }
 
-    const messages = await Message.find({ chatSession: req.params.id })
+    const rawMessages = await Message.find({ chatSession: req.params.id })
       .populate('sender', 'name email avatar role')
       .populate('replyTo', 'content messageType attachments fileUrl fileName sender')
       .populate('replyTo.sender', 'name avatar')
       .sort({ createdAt: 1 });
 
-    res.json({ success: true, messages });
+    res.json({ success: true, messages: mapMessagesForSamAI(rawMessages) });
   } catch (error) {
     console.error('Get messages error:', error);
     res.status(500).json({ message: 'Server error', error: error.message });

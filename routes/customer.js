@@ -9,6 +9,8 @@ const Message = require('../models/Message');
 const { checkTokenBalance } = require('../services/tokenService');
 const { ensureDefaultPlans, formatPlanForResponse } = require('../utils/planDefaults');
 const { notifyAgentsForNewChat } = require('../services/agentNotificationService');
+const { sendInitialAIGreeting } = require('../services/aiMessages');
+const { formatMessageForSamAI, mapMessagesForSamAI } = require('../utils/samAi');
 
 // @route   GET /api/customer/plans
 // @desc    Get all available plans
@@ -105,6 +107,11 @@ router.post('/request-service', protect, authorize('customer'), async (req, res)
         },
         serviceId: serviceId.toString() // So agents can filter by their serviceCategory
       });
+
+      // Kick off SamAI greeting for this chat
+      sendInitialAIGreeting(chatSession._id, io).catch(err => {
+        console.error('Error triggering SamAI greeting:', err);
+      });
     }
 
     res.json({
@@ -145,13 +152,13 @@ router.get('/chat-sessions', protect, authorize('customer'), async (req, res) =>
     // Add lastMessage to each chat session
     const chatSessionsWithLastMessage = await Promise.all(
       chatSessions.map(async (chat) => {
-        const lastMessage = await Message.findOne({ chatSession: chat._id })
+        const lastMessageDoc = await Message.findOne({ chatSession: chat._id })
           .sort({ createdAt: -1 })
           .populate('sender', 'name email')
           .lean();
         
         const chatObj = chat.toObject();
-        chatObj.lastMessage = lastMessage;
+        chatObj.lastMessage = formatMessageForSamAI(lastMessageDoc);
         
         // Calculate unread count
         const unreadCount = await Message.countDocuments({
@@ -196,11 +203,12 @@ router.get('/chat-session/:id', protect, authorize('customer'), async (req, res)
       return res.status(404).json({ message: 'Chat session not found' });
     }
 
-    const messages = await Message.find({ chatSession: chatSession._id })
+    const rawMessages = await Message.find({ chatSession: chatSession._id })
       .populate('sender', 'name email avatar role')
       .populate('replyTo', 'content messageType attachments fileUrl fileName sender')
       .populate('replyTo.sender', 'name avatar')
       .sort({ createdAt: 1 });
+    const messages = mapMessagesForSamAI(rawMessages);
 
     res.json({
       success: true,

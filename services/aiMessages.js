@@ -1,6 +1,37 @@
 const Message = require('../models/Message');
 const ChatSession = require('../models/ChatSession');
+const User = require('../models/User');
 const { generateAIResponse } = require('./openaiService');
+
+const SAM_AI_SENDER = {
+  _id: 'SAM_AI',
+  name: 'SamAI',
+  role: 'ai'
+};
+
+const formatGreeting = (customerName, serviceName) => {
+  const safeCustomer = customerName || 'there';
+  const safeService = serviceName || 'our support';
+  return `Hi ${safeCustomer}! I'm SamAI from the ${safeService} team. Thanks for reaching out—I'll help gather details while I connect you with the right specialist. Could you share a bit more about what you need today?`;
+};
+
+const emitAIMessage = (io, chatSessionId, content, options = {}) => {
+  if (!io) {
+    return;
+  }
+
+  io.to(`chat_${chatSessionId}`).emit('newMessage', {
+    _id: options._id || `samai_${Date.now()}`,
+    chatSession: chatSessionId,
+    sender: SAM_AI_SENDER,
+    senderRole: 'ai',
+    senderType: 'ai',
+    content,
+    messageType: 'text',
+    isAIMessage: true,
+    createdAt: options.createdAt || new Date()
+  });
+};
 
 /**
  * Send initial AI greeting when customer first joins chat
@@ -22,18 +53,12 @@ const sendInitialAIGreeting = async (chatSessionId, io) => {
 
     const serviceName = chatSession.service?.name || 'General Support';
     const customerName = chatSession.customer?.name || 'there';
-    
-    // Generate contextual greeting
-    const greeting = await generateAIResponse(
-      `Hello, I'm a new customer named ${customerName} and I need help with ${serviceName}.`,
-      [],
-      serviceName
-    );
+    const greeting = formatGreeting(customerName, serviceName);
 
     // Create AI message
     const message = await Message.create({
       chatSession: chatSessionId,
-      sender: chatSession.customer._id, // Use customer ID as placeholder
+      sender: chatSession.customer._id, // placeholder for schema requirement
       senderRole: 'ai',
       senderType: 'ai',
       content: greeting,
@@ -46,23 +71,7 @@ const sendInitialAIGreeting = async (chatSessionId, io) => {
     await chatSession.save();
 
     // Emit to chat room
-    const messageData = {
-      _id: message._id,
-      chatSession: chatSessionId,
-      sender: {
-        _id: 'ASKSAM_AI',
-        name: 'ASKSAM AI',
-        role: 'ai'
-      },
-      senderRole: 'ai',
-      senderType: 'ai',
-      content: greeting,
-      messageType: 'text',
-      isAIMessage: true,
-      createdAt: message.createdAt
-    };
-
-    io.to(`chat_${chatSessionId}`).emit('newMessage', messageData);
+    emitAIMessage(io, chatSessionId, greeting, { _id: message._id, createdAt: message.createdAt });
   } catch (error) {
     console.error('Error sending initial AI greeting:', error);
   }
@@ -75,6 +84,7 @@ const sendInitialAIGreeting = async (chatSessionId, io) => {
 const respondToCustomerMessage = async (chatSessionId, customerMessage, io) => {
   try {
     const chatSession = await ChatSession.findById(chatSessionId)
+      .populate('agent', 'name isOnline')
       .populate('service', 'name')
       .populate('customer', 'name');
     
@@ -82,9 +92,12 @@ const respondToCustomerMessage = async (chatSessionId, customerMessage, io) => {
       return;
     }
 
-    // Don't respond if agent has already joined
+    // Don't respond if agent is present and online
     if (chatSession.agent) {
-      return;
+      const agentUser = await User.findById(chatSession.agent._id || chatSession.agent);
+      if (agentUser?.isOnline) {
+        return;
+      }
     }
 
     // Don't respond if this is not a customer message
@@ -117,7 +130,7 @@ const respondToCustomerMessage = async (chatSessionId, customerMessage, io) => {
     // Create AI message
     const message = await Message.create({
       chatSession: chatSessionId,
-      sender: chatSession.customer._id, // Use customer ID as placeholder
+      sender: chatSession.customer._id,
       senderRole: 'ai',
       senderType: 'ai',
       content: aiResponse,
@@ -125,30 +138,42 @@ const respondToCustomerMessage = async (chatSessionId, customerMessage, io) => {
       isAIMessage: true
     });
 
-    // Emit to chat room
-    const messageData = {
-      _id: message._id,
-      chatSession: chatSessionId,
-      sender: {
-        _id: 'ASKSAM_AI',
-        name: 'ASKSAM AI',
-        role: 'ai'
-      },
-      senderRole: 'ai',
-      senderType: 'ai',
-      content: aiResponse,
-      messageType: 'text',
-      isAIMessage: true,
-      createdAt: message.createdAt
-    };
-
-    io.to(`chat_${chatSessionId}`).emit('newMessage', messageData);
+    emitAIMessage(io, chatSessionId, aiResponse, { _id: message._id, createdAt: message.createdAt });
   } catch (error) {
     console.error('Error generating AI response:', error);
   }
 };
 
+const sendAgentOnlineAnnouncement = async (chatSessionId, agentName, io) => {
+  try {
+    const chatSession = await ChatSession.findById(chatSessionId);
+    if (!chatSession || chatSession.aiHandOffSent) {
+      return;
+    }
+
+    const content = `Great news! Agent ${agentName} is online now and will take it from here. I'll stay close if you need anything else.`;
+
+    const message = await Message.create({
+      chatSession: chatSessionId,
+      sender: chatSession.customer,
+      senderRole: 'ai',
+      senderType: 'ai',
+      content,
+      messageType: 'text',
+      isAIMessage: true
+    });
+
+    chatSession.aiHandOffSent = true;
+    await chatSession.save();
+
+    emitAIMessage(io, chatSessionId, content, { _id: message._id, createdAt: message.createdAt });
+  } catch (error) {
+    console.error('Error sending AI hand-off announcement:', error);
+  }
+};
+
 module.exports = {
   sendInitialAIGreeting,
-  respondToCustomerMessage
+  respondToCustomerMessage,
+  sendAgentOnlineAnnouncement
 };

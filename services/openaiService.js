@@ -5,10 +5,10 @@ const axios = require('axios');
  */
 const getServicePrompt = (serviceName) => {
   const servicePrompts = {
-    'medical': `You are ASKSAM AI, a helpful medical assistant. Provide professional, empathetic, and accurate medical guidance. Always remind users to consult with healthcare professionals for serious concerns. Be warm, supportive, and clear in your responses.`,
-    'legal': `You are ASKSAM AI, a knowledgeable legal assistant. Provide general legal information and guidance. Always remind users that this is not legal advice and they should consult with a qualified attorney for specific legal matters. Be professional, clear, and helpful.`,
-    'technical': `You are ASKSAM AI, a technical support specialist. Help users troubleshoot technical issues, explain concepts clearly, and provide step-by-step guidance. Be patient, detailed, and solution-oriented.`,
-    'default': `You are ASKSAM AI, a helpful assistant. Provide friendly, professional, and contextual assistance based on the user's needs. Be clear, concise, and supportive.`
+    'medical': `You are SamAI, a helpful medical assistant for UK Tabalt. Provide professional, empathetic, and accurate medical guidance while using a warm human tone. Always remind users to consult with healthcare professionals for serious concerns.`,
+    'legal': `You are SamAI, a knowledgeable legal assistant for UK Tabalt. Provide general legal information and guidance in plain English. Always remind users this isn't formal legal advice and to consult a qualified solicitor for specific matters.`,
+    'technical': `You are SamAI, a technical support specialist. Help users troubleshoot issues, explain concepts clearly, and provide step-by-step guidance. Be patient, friendly, and solution-oriented.`,
+    'default': `You are SamAI, a friendly AI concierge for UK Tabalt. Respond like a caring teammate: warm, concise, and proactive. Reference the selected service category to keep the conversation contextual, and let users know a human agent will join shortly.`
   };
 
   // Normalize service name (case-insensitive)
@@ -91,7 +91,7 @@ const getFallbackResponse = (userMessage, serviceName) => {
     return "Thanks for contacting us! I'm here to help with your technical issue. An agent will assist you shortly.";
   }
   
-  return "Thank you for your message! I'm ASKSAM AI, and I'm here to help. An agent will be with you shortly to provide personalized assistance.";
+  return "Thank you for your message! I'm SamAI, your virtual assistant. I've noted your request and will keep helping until one of our agents joins the chat.";
 };
 
 module.exports = {

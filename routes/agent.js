@@ -4,6 +4,8 @@ const { protect, authorize } = require('../middleware/auth');
 const ChatSession = require('../models/ChatSession');
 const Message = require('../models/Message');
 const User = require('../models/User');
+const { sendAgentOnlineAnnouncement } = require('../services/aiMessages');
+const { formatMessageForSamAI, mapMessagesForSamAI } = require('../utils/samAi');
 
 // @route   GET /api/agent/dashboard
 // @desc    Get agent dashboard data
@@ -16,13 +18,13 @@ router.get('/dashboard', protect, authorize('agent'), async (req, res) => {
     const addLastMessageToChats = async (chats) => {
       return Promise.all(
         chats.map(async (chat) => {
-          const lastMessage = await Message.findOne({ chatSession: chat._id })
+          const lastMessageDoc = await Message.findOne({ chatSession: chat._id })
             .sort({ createdAt: -1 })
             .populate('sender', 'name email')
             .lean();
           
           const chatObj = chat.toObject ? chat.toObject() : chat;
-          chatObj.lastMessage = lastMessage;
+          chatObj.lastMessage = formatMessageForSamAI(lastMessageDoc);
           
           // Calculate unread count (messages not from agent and not read)
           const unreadCount = await Message.countDocuments({
@@ -212,6 +214,11 @@ router.post('/accept-request/:chatId', protect, authorize('agent'), async (req, 
           status: populatedChat.status
         }
       });
+
+      // Let SamAI inform the customer that a live agent is now online
+      sendAgentOnlineAnnouncement(chatSession._id, req.user.name, io).catch(err => {
+        console.error('Error sending SamAI hand-off message:', err);
+      });
     }
 
     res.json({
@@ -273,11 +280,12 @@ router.get('/chat-session/:id', protect, authorize('agent'), async (req, res) =>
       });
     }
 
-    const messages = await Message.find({ chatSession: chatSession._id })
+    const rawMessages = await Message.find({ chatSession: chatSession._id })
       .populate('sender', 'name email avatar role')
       .populate('replyTo', 'content messageType attachments fileUrl fileName sender')
       .populate('replyTo.sender', 'name avatar')
       .sort({ createdAt: 1 });
+    const messages = mapMessagesForSamAI(rawMessages);
 
     res.json({
       success: true,

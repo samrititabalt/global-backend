@@ -33,6 +33,10 @@ const chatSessionSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
+  aiHandOffSent: {
+    type: Boolean,
+    default: false
+  },
   createdAt: {
     type: Date,
     default: Date.now

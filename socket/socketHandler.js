@@ -4,6 +4,7 @@ const Message = require('../models/Message');
 const Call = require('../models/Call');
 const { assignAgent, reassignAgent } = require('../services/agentAssignment');
 const { deductToken, checkTokenBalance } = require('../services/tokenService');
+const { sendInitialAIGreeting, respondToCustomerMessage } = require('../services/aiMessages');
 
 const socketHandler = (io) => {
   // Store online users
@@ -81,6 +82,13 @@ const socketHandler = (io) => {
           .populate('service', 'name');
 
         if (!user || !chatSession) return;
+
+        // Trigger SamAI greeting (safe to call multiple times - guarded internally)
+        if (user.role === 'customer') {
+          sendInitialAIGreeting(chatSessionId, io).catch(err => {
+            console.error('Error triggering SamAI greeting from joinChat:', err);
+          });
+        }
         
         // Emit user online status to this chat (to other users in the chat)
         socket.to(`chat_${chatSessionId}`).emit('userOnline', {
@@ -155,8 +163,6 @@ const socketHandler = (io) => {
             }
           }
         }
-
-        // AI integration removed - no automatic greetings
 
         // Notify others in the chat
         socket.to(`chat_${chatSessionId}`).emit('userJoined', {
@@ -295,13 +301,15 @@ const socketHandler = (io) => {
         // Emit to all in chat room
         io.to(`chat_${chatSessionId}`).emit('newMessage', messageData);
 
-        // If customer sent a message and no agent has joined, generate AI response
+        // If customer sent a message and no agent has joined/online, generate AI response
         if (sender.role === 'customer') {
           // Update token balance for customer
           const updatedUser = await User.findById(senderId);
           socket.emit('tokenBalanceUpdate', { balance: updatedUser.tokenBalance });
-          
-          // AI integration removed - no automatic responses
+
+          respondToCustomerMessage(chatSessionId, messageData, io).catch(err => {
+            console.error('Error triggering SamAI response:', err);
+          });
         }
       } catch (error) {
         console.error('Send message error:', error);
