@@ -82,6 +82,7 @@ app.use('/api/public', require('./routes/public'));
 app.use('/api/chat', require('./routes/chat'));
 app.use('/api/call', require('./routes/call'));
 app.use('/api/payment', require('./routes/payment'));
+app.use('/api/facebook-ads', require('./routes/facebookAds'));
 
 // Redirect common OAuth routes that are missing /api prefix
 app.get('/auth/google', (req, res) => {
