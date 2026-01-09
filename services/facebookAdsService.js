@@ -18,10 +18,11 @@ const OBJECTIVE_MAP = {
   sales: 'OUTCOME_SALES',
 };
 
+// Ad sets use legacy optimization_goal values (not OUTCOME_*)
 const OPTIMIZATION_MAP = {
-  traffic: 'OUTCOME_TRAFFIC',
-  leads: 'OUTCOME_LEADS',
-  sales: 'OUTCOME_SALES',
+  traffic: 'LINK_CLICKS',
+  leads: 'LEAD_GENERATION',
+  sales: 'OFFSITE_CONVERSIONS',
 };
 
 const buildStateToken = (userId) => {
@@ -213,7 +214,6 @@ const launchQuickCampaign = async ({
     daily_budget: toMinorUnits(dailyBudget),
     billing_event: 'IMPRESSIONS',
     optimization_goal: OPTIMIZATION_MAP[goal] || OPTIMIZATION_MAP.traffic,
-    destination_type: 'WEBSITE',
     targeting: {
       geo_locations: {
         countries: ['GB'],
