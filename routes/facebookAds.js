@@ -73,8 +73,11 @@ router.post('/launch', protect, async (req, res) => {
       return res.status(409).json({ message: 'Facebook account not connected' });
     }
 
-    console.error('Facebook launch error:', error);
-    res.status(500).json({ message: 'Unable to launch campaign', error: error.message });
+    console.error('Facebook launch error:', error?.response?.data || error);
+    res.status(500).json({
+      message: 'Unable to launch campaign',
+      error: error?.response?.data || error.message,
+    });
   }
 });
 
