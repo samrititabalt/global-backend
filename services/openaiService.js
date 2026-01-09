@@ -1,29 +1,34 @@
 const axios = require('axios');
 
+const SERVICE_PROMPTS = {
+  medical: `You are SamAI, a helpful medical assistant for UK Tabalt. Provide professional, empathetic, and accurate medical guidance while using a warm human tone. Always remind users to consult with healthcare professionals for serious concerns.`,
+  legal: `You are SamAI, a knowledgeable legal assistant for UK Tabalt. Provide general legal information and guidance in plain English. Always remind users this isn't formal legal advice and to consult a qualified solicitor for specific matters.`,
+  technical: `You are SamAI, a technical support specialist. Help users troubleshoot issues, explain concepts clearly, and provide step-by-step guidance. Be patient, friendly, and solution-oriented.`,
+  default: `You are SamAI, a friendly AI concierge for UK Tabalt. Respond like a caring teammate: warm, concise, and proactive. Reference the selected service category to keep the conversation contextual, and let users know a human agent will join shortly.`
+};
+
+const detectServiceCategory = (serviceName = '') => {
+  const normalizedName = serviceName.toLowerCase();
+
+  if (normalizedName.includes('medical') || normalizedName.includes('health') || normalizedName.includes('doctor')) {
+    return 'medical';
+  }
+  if (normalizedName.includes('legal') || normalizedName.includes('law') || normalizedName.includes('attorney')) {
+    return 'legal';
+  }
+  if (normalizedName.includes('technical') || normalizedName.includes('tech') || normalizedName.includes('support') || normalizedName.includes('it')) {
+    return 'technical';
+  }
+
+  return 'default';
+};
+
 /**
  * Get service-specific system prompt for ChatGPT
  */
 const getServicePrompt = (serviceName) => {
-  const servicePrompts = {
-    'medical': `You are SamAI, a helpful medical assistant for UK Tabalt. Provide professional, empathetic, and accurate medical guidance while using a warm human tone. Always remind users to consult with healthcare professionals for serious concerns.`,
-    'legal': `You are SamAI, a knowledgeable legal assistant for UK Tabalt. Provide general legal information and guidance in plain English. Always remind users this isn't formal legal advice and to consult a qualified solicitor for specific matters.`,
-    'technical': `You are SamAI, a technical support specialist. Help users troubleshoot issues, explain concepts clearly, and provide step-by-step guidance. Be patient, friendly, and solution-oriented.`,
-    'default': `You are SamAI, a friendly AI concierge for UK Tabalt. Respond like a caring teammate: warm, concise, and proactive. Reference the selected service category to keep the conversation contextual, and let users know a human agent will join shortly.`
-  };
-
-  // Normalize service name (case-insensitive)
-  const normalizedName = (serviceName || '').toLowerCase();
-  
-  // Check for keywords in service name
-  if (normalizedName.includes('medical') || normalizedName.includes('health') || normalizedName.includes('doctor')) {
-    return servicePrompts['medical'];
-  } else if (normalizedName.includes('legal') || normalizedName.includes('law') || normalizedName.includes('attorney')) {
-    return servicePrompts['legal'];
-  } else if (normalizedName.includes('technical') || normalizedName.includes('tech') || normalizedName.includes('support')) {
-    return servicePrompts['technical'];
-  }
-  
-  return servicePrompts['default'];
+  const category = detectServiceCategory(serviceName);
+  return SERVICE_PROMPTS[category];
 };
 
 /**
@@ -78,20 +83,37 @@ const generateAIResponse = async (userMessage, chatHistory, serviceName) => {
 };
 
 /**
+ * Condense a user message so fallback replies feel contextual.
+ */
+const summarizeUserMessage = (message) => {
+  if (!message || typeof message !== 'string') {
+    return 'this request';
+  }
+
+  const condensed = message.replace(/\s+/g, ' ').trim();
+  if (!condensed) {
+    return 'this request';
+  }
+
+  return condensed.length > 200 ? `${condensed.slice(0, 200)}...` : condensed;
+};
+
+/**
  * Fallback response when OpenAI is unavailable
  */
 const getFallbackResponse = (userMessage, serviceName) => {
-  const normalizedName = (serviceName || '').toLowerCase();
-  
-  if (normalizedName.includes('medical') || normalizedName.includes('health')) {
-    return "Thank you for your message. I'm here to help with your medical inquiry. An agent will be with you shortly to provide personalized assistance.";
-  } else if (normalizedName.includes('legal') || normalizedName.includes('law')) {
-    return "Thank you for reaching out. I'm here to assist with your legal question. A qualified agent will review your request and respond soon.";
-  } else if (normalizedName.includes('technical') || normalizedName.includes('tech')) {
-    return "Thanks for contacting us! I'm here to help with your technical issue. An agent will assist you shortly.";
-  }
-  
-  return "Thank you for your message! I'm SamAI, your virtual assistant. I've noted your request and will keep helping until one of our agents joins the chat.";
+  const category = detectServiceCategory(serviceName);
+  const topic = summarizeUserMessage(userMessage);
+  const quotedTopic = topic === 'this request' ? topic : `“${topic}”`;
+
+  const responses = {
+    medical: `I understand you're dealing with ${quotedTopic}. Here's an immediate plan: I'll capture key symptoms, duration, and any medications so our healthcare specialist can step in with precise guidance. Please let me know anything that feels urgent, plus any red-flag symptoms you're experiencing. A licensed clinician will join shortly, but I'm staying with you meanwhile.`,
+    legal: `Thanks for outlining ${quotedTopic}. I'll organize the important facts—jurisdiction, deadlines, paperwork on hand, and desired outcomes—so our legal specialist can respond efficiently. Could you share any relevant contracts or previous correspondence while I keep the conversation moving?`,
+    technical: `Got it—you're working on ${quotedTopic}. Here's how we can move fast: I'll log your current setup, desired result, constraints, and what you've tried so far. If you can add details like budget, hardware, or error codes, I can prepare troubleshooting steps before the technical agent joins.`,
+    default: `Appreciate the detail about ${quotedTopic}. I'll map out the goal, timeline, and success criteria so the right teammate can jump in ready with next steps. Feel free to add any must-haves or blockers—I'll keep everything organized until the specialist arrives.`
+  };
+
+  return responses[category] || responses.default;
 };
 
 module.exports = {
