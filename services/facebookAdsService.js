@@ -13,9 +13,9 @@ const OAUTH_SCOPES = [
 ].join(',');
 
 const OBJECTIVE_MAP = {
-  traffic: 'LINK_CLICKS',
-  leads: 'LEAD_GENERATION',
-  sales: 'CONVERSIONS',
+  traffic: 'OUTCOME_TRAFFIC',
+  leads: 'OUTCOME_LEADS',
+  sales: 'OUTCOME_SALES',
 };
 
 const OPTIMIZATION_MAP = {
@@ -203,6 +203,7 @@ const launchQuickCampaign = async ({
     name: `QuickLaunch • ${goal} • ${new Date().toISOString()}`,
     objective: OBJECTIVE_MAP[goal] || OBJECTIVE_MAP.traffic,
     status: Campaign.Status.paused,
+    is_adset_budget_sharing_enabled: false,
     special_ad_categories: ['NONE'],
   });
 
