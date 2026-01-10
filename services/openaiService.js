@@ -111,7 +111,7 @@ const generateAIResponse = async (userMessage, chatHistory, serviceName) => {
     const systemPrompt = getServicePrompt(serviceName);
     const messages = buildChatMessages(systemPrompt, chatHistory, userMessage);
     const completion = await client.chat.completions.create({
-      model: process.env.OPENAI_MODEL || 'gpt-3.5-turbo',
+      model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
       messages,
       temperature: numberFromEnv(process.env.OPENAI_TEMPERATURE, 0.7),
       top_p: numberFromEnv(process.env.OPENAI_TOP_P, 0.9),
