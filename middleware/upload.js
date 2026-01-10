@@ -82,7 +82,8 @@ const upload = multer({
   fileFilter: fileFilter
 });
 
-// Special upload for homepage video with higher size limit
+// Special upload for homepage video with higher size limit (200MB)
+// Uses diskStorage which streams files to disk, not loading entirely into memory
 const videoUpload = multer({
   storage: multer.diskStorage({
     destination: function (req, file, cb) {
@@ -100,7 +101,11 @@ const videoUpload = multer({
     }
   }),
   limits: {
-    fileSize: parseInt(process.env.MAX_VIDEO_SIZE) || 100 * 1024 * 1024 // 100MB default for videos
+    fileSize: parseInt(process.env.MAX_VIDEO_SIZE) || 200 * 1024 * 1024, // 200MB default for videos
+    fieldSize: 200 * 1024 * 1024, // 200MB for form fields
+    fieldNameSize: 200, // Max field name size
+    fields: 10, // Max number of non-file fields
+    files: 1 // Max number of file fields
   },
   fileFilter: (req, file, cb) => {
     const allowedTypes = ['video/mp4', 'video/quicktime', 'video/webm', 'video/x-msvideo'];

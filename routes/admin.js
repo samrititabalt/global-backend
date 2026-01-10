@@ -1172,13 +1172,38 @@ router.delete('/timesheets/:id', protect, authorize('admin'), async (req, res) =
 // @route   POST /api/admin/homepage-video
 // @desc    Upload homepage background video
 // @access  Private (Admin)
-router.post('/homepage-video', protect, authorize('admin'), videoUpload.single('video'), async (req, res) => {
+router.post('/homepage-video', protect, authorize('admin'), (req, res, next) => {
+  videoUpload.single('video')(req, res, (err) => {
+    // Handle multer errors before processing
+    if (err) {
+      console.error('Multer upload error:', err);
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(400).json({ 
+          message: 'Video file is too large. Maximum size is 200MB.',
+          error: err.message 
+        });
+      }
+      if (err.code && err.code.startsWith('LIMIT_')) {
+        return res.status(400).json({ 
+          message: 'Upload error: ' + err.message,
+          error: err.code 
+        });
+      }
+      return res.status(400).json({ 
+        message: 'File upload error: ' + err.message,
+        error: err.code || 'UPLOAD_ERROR'
+      });
+    }
+    next();
+  });
+}, async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ message: 'No video file uploaded' });
     }
 
     // File is already saved as homepage-video.mp4 by the middleware
+    // Multer diskStorage streams files to disk, not loading entirely into memory
     const videoPath = `/uploads/videos/homepage-video.mp4`;
     
     res.json({ 
@@ -1189,7 +1214,7 @@ router.post('/homepage-video', protect, authorize('admin'), videoUpload.single('
       size: req.file.size
     });
   } catch (error) {
-    console.error('Video upload error:', error);
+    console.error('Video upload processing error:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 });

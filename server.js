@@ -10,6 +10,11 @@ const { ensureDefaultPlans } = require('./utils/planDefaults');
 
 const app = express();
 const server = http.createServer(app);
+
+// Configure server for large file uploads
+server.timeout = 300000; // 5 minutes timeout for large uploads (200MB)
+server.keepAliveTimeout = 300000; // Keep connections alive for large uploads
+server.headersTimeout = 300000; // Headers timeout for large uploads
 const allowedOrigins = [
   process.env.FRONTEND_URL || 'https://mainproduct.vercel.app',
   'https://mainproduct.vercel.app',
@@ -38,8 +43,10 @@ const io = socketIo(server, {
 // Middleware
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+
+// Increase body size limits for large file uploads (200MB)
+app.use(express.json({ limit: '200mb' }));
+app.use(express.urlencoded({ extended: true, limit: '200mb' }));
 app.use('/uploads', express.static('uploads'));
 
 // Session configuration for OAuth (optional, but recommended)
