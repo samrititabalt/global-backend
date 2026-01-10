@@ -18,6 +18,8 @@ const storage = multer.diskStorage({
       uploadPath += 'files/';
     } else if (file.fieldname === 'audio') {
       uploadPath += 'audio/';
+    } else if (file.fieldname === 'video') {
+      uploadPath += 'videos/';
     }
     
     if (!fs.existsSync(uploadPath)) {
@@ -27,8 +29,13 @@ const storage = multer.diskStorage({
     cb(null, uploadPath);
   },
   filename: function (req, file, cb) {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
+    // For homepage video, use fixed filename
+    if (file.fieldname === 'video' && req.body?.videoType === 'homepage') {
+      cb(null, 'homepage-video.mp4');
+    } else {
+      const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+      cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
+    }
   }
 });
 
@@ -53,6 +60,15 @@ const fileFilter = (req, file, cb) => {
       cb(new Error('Only audio files are allowed'), false);
     }
   }
+  // Accept video files (mp4, mov, webm)
+  else if (file.fieldname === 'video') {
+    const allowedTypes = ['video/mp4', 'video/quicktime', 'video/webm', 'video/x-msvideo'];
+    if (allowedTypes.includes(file.mimetype) || file.originalname.match(/\.(mp4|mov|webm|avi)$/i)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only video files (mp4, mov, webm) are allowed'), false);
+    }
+  }
   else {
     cb(null, true);
   }
@@ -66,5 +82,36 @@ const upload = multer({
   fileFilter: fileFilter
 });
 
+// Special upload for homepage video with higher size limit
+const videoUpload = multer({
+  storage: multer.diskStorage({
+    destination: function (req, file, cb) {
+      const uploadPath = 'uploads/videos/';
+      if (!fs.existsSync(uploadPath)) {
+        fs.mkdirSync(uploadPath, { recursive: true });
+      }
+      cb(null, uploadPath);
+    },
+    filename: function (req, file, cb) {
+      // Always save as homepage-video.mp4 for consistent path
+      // Note: Users should ideally upload MP4 files for best compatibility
+      // Non-MP4 files will be saved with .mp4 extension (may require conversion for proper playback)
+      cb(null, 'homepage-video.mp4');
+    }
+  }),
+  limits: {
+    fileSize: parseInt(process.env.MAX_VIDEO_SIZE) || 100 * 1024 * 1024 // 100MB default for videos
+  },
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = ['video/mp4', 'video/quicktime', 'video/webm', 'video/x-msvideo'];
+    if (allowedTypes.includes(file.mimetype) || file.originalname.match(/\.(mp4|mov|webm|avi)$/i)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only video files (mp4, mov, webm) are allowed'), false);
+    }
+  }
+});
+
 module.exports = upload;
+module.exports.videoUpload = videoUpload;
 

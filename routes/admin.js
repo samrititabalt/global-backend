@@ -13,6 +13,9 @@ const { addTokens } = require('../services/tokenService');
 const generatePassword = require('../utils/generatePassword');
 const { sendCredentialsEmail } = require('../utils/sendEmail');
 const { upload, uploadToCloudinary } = require('../middleware/cloudinaryUpload');
+const { videoUpload } = require('../middleware/upload');
+const path = require('path');
+const fs = require('fs');
 
 // ========== SERVICE MANAGEMENT ==========
 
@@ -1160,6 +1163,65 @@ router.delete('/timesheets/:id', protect, authorize('admin'), async (req, res) =
     await Timesheet.findByIdAndDelete(req.params.id);
     res.json({ success: true, message: 'Timesheet entry deleted successfully' });
   } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// ========== HOMEPAGE VIDEO MANAGEMENT ==========
+
+// @route   POST /api/admin/homepage-video
+// @desc    Upload homepage background video
+// @access  Private (Admin)
+router.post('/homepage-video', protect, authorize('admin'), videoUpload.single('video'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ message: 'No video file uploaded' });
+    }
+
+    // File is already saved as homepage-video.mp4 by the middleware
+    const videoPath = `/uploads/videos/homepage-video.mp4`;
+    
+    res.json({ 
+      success: true, 
+      message: 'Homepage video uploaded successfully',
+      videoPath: videoPath,
+      fileName: req.file.filename,
+      size: req.file.size
+    });
+  } catch (error) {
+    console.error('Video upload error:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   GET /api/admin/homepage-video
+// @desc    Get homepage video info
+// @access  Private (Admin)
+router.get('/homepage-video', protect, authorize('admin'), async (req, res) => {
+  try {
+    const videoPath = path.join(process.cwd(), 'uploads', 'videos', 'homepage-video.mp4');
+    const videoExists = fs.existsSync(videoPath);
+    
+    if (!videoExists) {
+      return res.json({ 
+        success: true, 
+        videoPath: null,
+        exists: false 
+      });
+    }
+
+    const stats = fs.statSync(videoPath);
+    const videoPathUrl = `/uploads/videos/homepage-video.mp4`;
+    
+    res.json({ 
+      success: true, 
+      videoPath: videoPathUrl,
+      exists: true,
+      size: stats.size,
+      lastModified: stats.mtime
+    });
+  } catch (error) {
+    console.error('Error getting video info:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 });
