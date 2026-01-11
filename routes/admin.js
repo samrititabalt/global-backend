@@ -9,6 +9,9 @@ const Transaction = require('../models/Transaction');
 const ChatSession = require('../models/ChatSession');
 const Message = require('../models/Message');
 const Timesheet = require('../models/Timesheet');
+const Lead = require('../models/Lead');
+const AgentHoliday = require('../models/AgentHoliday');
+const AgentHours = require('../models/AgentHours');
 const { addTokens } = require('../services/tokenService');
 const generatePassword = require('../utils/generatePassword');
 const { sendCredentialsEmail } = require('../utils/sendEmail');
@@ -1247,6 +1250,434 @@ router.get('/homepage-video', protect, authorize('admin'), async (req, res) => {
     });
   } catch (error) {
     console.error('Error getting video info:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// ========== CRM - LEADS ==========
+
+// @route   GET /api/admin/crm/leads
+// @desc    Get all leads with filters
+// @access  Private (Admin)
+router.get('/crm/leads', protect, authorize('admin'), async (req, res) => {
+  try {
+    const { status, search, startDate, endDate, sortBy = 'dateCaptured', sortOrder = 'desc' } = req.query;
+    
+    let query = {};
+    
+    if (status) {
+      query.status = status;
+    }
+    
+    if (search) {
+      query.$or = [
+        { email: { $regex: search, $options: 'i' } },
+        { visitorName: { $regex: search, $options: 'i' } },
+        { companyName: { $regex: search, $options: 'i' } },
+        { phoneNumber: { $regex: search, $options: 'i' } }
+      ];
+    }
+    
+    if (startDate || endDate) {
+      query.dateCaptured = {};
+      if (startDate) query.dateCaptured.$gte = new Date(startDate);
+      if (endDate) query.dateCaptured.$lte = new Date(endDate);
+    }
+    
+    const sortOptions = {};
+    sortOptions[sortBy] = sortOrder === 'asc' ? 1 : -1;
+    
+    const leads = await Lead.find(query).sort(sortOptions);
+    
+    res.json({ success: true, leads });
+  } catch (error) {
+    console.error('Error fetching leads:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   POST /api/admin/crm/leads
+// @desc    Create a new lead
+// @access  Private (Admin)
+router.post('/crm/leads', protect, authorize('admin'), [
+  body('email').isEmail().withMessage('Valid email is required')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    const { visitorName, email, phoneNumber, companyName, source, status, notes } = req.body;
+
+    const lead = await Lead.create({
+      visitorName,
+      email,
+      phoneNumber,
+      companyName,
+      source: source || 'Chatbot',
+      status: status || 'Lead',
+      notes
+    });
+
+    res.status(201).json({ success: true, lead });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   PUT /api/admin/crm/leads/:id
+// @desc    Update a lead
+// @access  Private (Admin)
+router.put('/crm/leads/:id', protect, authorize('admin'), async (req, res) => {
+  try {
+    const { visitorName, email, phoneNumber, companyName, status, notes } = req.body;
+    
+    const lead = await Lead.findByIdAndUpdate(
+      req.params.id,
+      {
+        visitorName,
+        email,
+        phoneNumber,
+        companyName,
+        status,
+        notes,
+        updatedAt: Date.now()
+      },
+      { new: true, runValidators: true }
+    );
+
+    if (!lead) {
+      return res.status(404).json({ message: 'Lead not found' });
+    }
+
+    res.json({ success: true, lead });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   DELETE /api/admin/crm/leads/:id
+// @desc    Delete a lead
+// @access  Private (Admin)
+router.delete('/crm/leads/:id', protect, authorize('admin'), async (req, res) => {
+  try {
+    const lead = await Lead.findByIdAndDelete(req.params.id);
+
+    if (!lead) {
+      return res.status(404).json({ message: 'Lead not found' });
+    }
+
+    res.json({ success: true, message: 'Lead deleted successfully' });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// ========== CRM - CUSTOMERS & AGENTS ==========
+
+// @route   GET /api/admin/crm/customers
+// @desc    Get all customers for CRM
+// @access  Private (Admin)
+router.get('/crm/customers', protect, authorize('admin'), async (req, res) => {
+  try {
+    const customers = await User.find({ role: 'customer' })
+      .select('name email phone country createdAt')
+      .sort({ createdAt: -1 });
+    
+    res.json({ success: true, customers });
+  } catch (error) {
+    console.error('Error fetching customers:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   GET /api/admin/crm/agents
+// @desc    Get all agents for CRM
+// @access  Private (Admin)
+router.get('/crm/agents', protect, authorize('admin'), async (req, res) => {
+  try {
+    const agents = await User.find({ role: 'agent' })
+      .select('name email phone serviceCategory serviceCategories isActive isOnline createdAt')
+      .populate('serviceCategory', 'name')
+      .populate('serviceCategories', 'name')
+      .sort({ createdAt: -1 });
+    
+    res.json({ success: true, agents });
+  } catch (error) {
+    console.error('Error fetching agents:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// ========== AGENT MANAGEMENT - HOLIDAYS ==========
+
+// @route   GET /api/admin/agent-management/holidays
+// @desc    Get all agent holidays
+// @access  Private (Admin)
+router.get('/agent-management/holidays', protect, authorize('admin'), async (req, res) => {
+  try {
+    const { agentId, startDate, endDate } = req.query;
+    
+    let query = {};
+    if (agentId) query.agent = agentId;
+    if (startDate || endDate) {
+      query.$or = [
+        { startDate: { $lte: new Date(endDate || '2099-12-31') }, endDate: { $gte: new Date(startDate || '1970-01-01') } }
+      ];
+    }
+    
+    const holidays = await AgentHoliday.find(query)
+      .populate('agent', 'name email')
+      .sort({ startDate: 1 });
+    
+    res.json({ success: true, holidays });
+  } catch (error) {
+    console.error('Error fetching holidays:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   POST /api/admin/agent-management/holidays
+// @desc    Create a new agent holiday
+// @access  Private (Admin)
+router.post('/agent-management/holidays', protect, authorize('admin'), [
+  body('agent').notEmpty().withMessage('Agent is required'),
+  body('startDate').isISO8601().withMessage('Valid start date is required'),
+  body('endDate').isISO8601().withMessage('Valid end date is required')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    const { agent, startDate, endDate, notes } = req.body;
+
+    if (new Date(endDate) < new Date(startDate)) {
+      return res.status(400).json({ message: 'End date must be after start date' });
+    }
+
+    const holiday = await AgentHoliday.create({
+      agent,
+      startDate: new Date(startDate),
+      endDate: new Date(endDate),
+      notes
+    });
+
+    await holiday.populate('agent', 'name email');
+
+    res.status(201).json({ success: true, holiday });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   PUT /api/admin/agent-management/holidays/:id
+// @desc    Update an agent holiday
+// @access  Private (Admin)
+router.put('/agent-management/holidays/:id', protect, authorize('admin'), async (req, res) => {
+  try {
+    const { startDate, endDate, notes } = req.body;
+
+    if (startDate && endDate && new Date(endDate) < new Date(startDate)) {
+      return res.status(400).json({ message: 'End date must be after start date' });
+    }
+
+    const updateData = { updatedAt: Date.now() };
+    if (startDate) updateData.startDate = new Date(startDate);
+    if (endDate) updateData.endDate = new Date(endDate);
+    if (notes !== undefined) updateData.notes = notes;
+
+    const holiday = await AgentHoliday.findByIdAndUpdate(
+      req.params.id,
+      updateData,
+      { new: true, runValidators: true }
+    ).populate('agent', 'name email');
+
+    if (!holiday) {
+      return res.status(404).json({ message: 'Holiday not found' });
+    }
+
+    res.json({ success: true, holiday });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   DELETE /api/admin/agent-management/holidays/:id
+// @desc    Delete an agent holiday
+// @access  Private (Admin)
+router.delete('/agent-management/holidays/:id', protect, authorize('admin'), async (req, res) => {
+  try {
+    const holiday = await AgentHoliday.findByIdAndDelete(req.params.id);
+
+    if (!holiday) {
+      return res.status(404).json({ message: 'Holiday not found' });
+    }
+
+    res.json({ success: true, message: 'Holiday deleted successfully' });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// ========== AGENT MANAGEMENT - HOURS & REMUNERATION ==========
+
+// @route   GET /api/admin/agent-management/hours
+// @desc    Get all agent hours
+// @access  Private (Admin)
+router.get('/agent-management/hours', protect, authorize('admin'), async (req, res) => {
+  try {
+    const { agentId, startDate, endDate } = req.query;
+    
+    let query = {};
+    if (agentId) query.agent = agentId;
+    if (startDate || endDate) {
+      query.date = {};
+      if (startDate) query.date.$gte = new Date(startDate);
+      if (endDate) query.date.$lte = new Date(endDate);
+    }
+    
+    const hours = await AgentHours.find(query)
+      .populate('agent', 'name email')
+      .sort({ date: -1 });
+    
+    res.json({ success: true, hours });
+  } catch (error) {
+    console.error('Error fetching agent hours:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   POST /api/admin/agent-management/hours
+// @desc    Create a new agent hours entry
+// @access  Private (Admin)
+router.post('/agent-management/hours', protect, authorize('admin'), [
+  body('agent').notEmpty().withMessage('Agent is required'),
+  body('payRate').isNumeric().withMessage('Pay rate must be a number'),
+  body('hoursWorked').isNumeric().withMessage('Hours worked must be a number')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    const { agent, payRate, hoursWorked, date, notes } = req.body;
+    const totalPay = parseFloat(payRate) * parseFloat(hoursWorked);
+
+    const agentHours = await AgentHours.create({
+      agent,
+      payRate: parseFloat(payRate),
+      hoursWorked: parseFloat(hoursWorked),
+      totalPay,
+      date: date ? new Date(date) : new Date(),
+      notes
+    });
+
+    await agentHours.populate('agent', 'name email');
+
+    res.status(201).json({ success: true, agentHours });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   PUT /api/admin/agent-management/hours/:id
+// @desc    Update agent hours entry
+// @access  Private (Admin)
+router.put('/agent-management/hours/:id', protect, authorize('admin'), async (req, res) => {
+  try {
+    const { payRate, hoursWorked, date, notes } = req.body;
+
+    const updateData = { updatedAt: Date.now() };
+    
+    if (payRate !== undefined) updateData.payRate = parseFloat(payRate);
+    if (hoursWorked !== undefined) updateData.hoursWorked = parseFloat(hoursWorked);
+    if (date !== undefined) updateData.date = new Date(date);
+    if (notes !== undefined) updateData.notes = notes;
+    
+    // Recalculate total pay if payRate or hoursWorked changed
+    if (payRate !== undefined || hoursWorked !== undefined) {
+      const existing = await AgentHours.findById(req.params.id);
+      const finalPayRate = payRate !== undefined ? parseFloat(payRate) : existing.payRate;
+      const finalHoursWorked = hoursWorked !== undefined ? parseFloat(hoursWorked) : existing.hoursWorked;
+      updateData.totalPay = finalPayRate * finalHoursWorked;
+    }
+
+    const agentHours = await AgentHours.findByIdAndUpdate(
+      req.params.id,
+      updateData,
+      { new: true, runValidators: true }
+    ).populate('agent', 'name email');
+
+    if (!agentHours) {
+      return res.status(404).json({ message: 'Agent hours entry not found' });
+    }
+
+    res.json({ success: true, agentHours });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   DELETE /api/admin/agent-management/hours/:id
+// @desc    Delete agent hours entry
+// @access  Private (Admin)
+router.delete('/agent-management/hours/:id', protect, authorize('admin'), async (req, res) => {
+  try {
+    const agentHours = await AgentHours.findByIdAndDelete(req.params.id);
+
+    if (!agentHours) {
+      return res.status(404).json({ message: 'Agent hours entry not found' });
+    }
+
+    res.json({ success: true, message: 'Agent hours entry deleted successfully' });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// ========== AGENT MANAGEMENT - CALENDAR DATA ==========
+
+// @route   GET /api/admin/agent-management/calendar
+// @desc    Get calendar data (holidays, hours, leads)
+// @access  Private (Admin)
+router.get('/agent-management/calendar', protect, authorize('admin'), async (req, res) => {
+  try {
+    const { startDate, endDate } = req.query;
+    
+    const start = startDate ? new Date(startDate) : new Date(new Date().setMonth(new Date().getMonth() - 1));
+    const end = endDate ? new Date(endDate) : new Date(new Date().setMonth(new Date().getMonth() + 1));
+    
+    // Get holidays
+    const holidays = await AgentHoliday.find({
+      $or: [
+        { startDate: { $lte: end }, endDate: { $gte: start } }
+      ]
+    }).populate('agent', 'name email');
+    
+    // Get hours entries
+    const hours = await AgentHours.find({
+      date: { $gte: start, $lte: end }
+    }).populate('agent', 'name email');
+    
+    // Get leads (optional)
+    const leads = await Lead.find({
+      dateCaptured: { $gte: start, $lte: end }
+    });
+    
+    res.json({ 
+      success: true, 
+      calendar: {
+        holidays,
+        hours,
+        leads
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching calendar data:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 });

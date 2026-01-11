@@ -4,6 +4,7 @@ const Plan = require('../models/Plan');
 const { ensureDefaultPlans, formatPlanForResponse } = require('../utils/planDefaults');
 const mail = require('../utils/sendEmail');
 const { generateAIResponse } = require('../services/openaiService');
+const Lead = require('../models/Lead');
 
 router.get('/plans', async (req, res) => {
   try {
@@ -218,6 +219,20 @@ router.post('/send-contact-info', async (req, res) => {
     `;
 
     const result = await mail('spbajaj25@gmail.com', subject, htmlContent);
+
+    // Save lead to CRM database
+    try {
+      await Lead.create({
+        email,
+        phoneNumber,
+        source: 'Chatbot',
+        status: 'Lead',
+        dateCaptured: new Date()
+      });
+    } catch (leadError) {
+      console.error('Error saving lead to CRM:', leadError);
+      // Don't fail the request if lead save fails, just log it
+    }
 
     if (result.success) {
       res.json({
