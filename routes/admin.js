@@ -12,6 +12,7 @@ const Timesheet = require('../models/Timesheet');
 const Lead = require('../models/Lead');
 const AgentHoliday = require('../models/AgentHoliday');
 const AgentHours = require('../models/AgentHours');
+const ResumeBuilderUsage = require('../models/ResumeBuilderUsage');
 const { addTokens } = require('../services/tokenService');
 const generatePassword = require('../utils/generatePassword');
 const { sendCredentialsEmail } = require('../utils/sendEmail');
@@ -1678,6 +1679,49 @@ router.get('/agent-management/calendar', protect, authorize('admin'), async (req
     });
   } catch (error) {
     console.error('Error fetching calendar data:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// ========== RESUME BUILDER USAGE TRACKING ==========
+
+// @route   GET /api/admin/resume-builder/usage
+// @desc    Get all resume builder usage records
+// @access  Private (Admin)
+router.get('/resume-builder/usage', protect, authorize('admin'), async (req, res) => {
+  try {
+    const usageRecords = await ResumeBuilderUsage.find()
+      .populate('customer', 'name email')
+      .sort({ usedAt: -1 });
+    
+    // Group by customer
+    const customerUsage = {};
+    usageRecords.forEach(record => {
+      const customerId = record.customer._id.toString();
+      if (!customerUsage[customerId]) {
+        customerUsage[customerId] = {
+          customer: record.customer,
+          totalUses: 0,
+          usageHistory: []
+        };
+      }
+      customerUsage[customerId].totalUses++;
+      customerUsage[customerId].usageHistory.push({
+        usedAt: record.usedAt,
+        _id: record._id
+      });
+    });
+
+    const result = Object.values(customerUsage).map(item => ({
+      customer: item.customer,
+      totalUses: item.totalUses,
+      lastUsed: item.usageHistory[0]?.usedAt || null,
+      usageHistory: item.usageHistory
+    }));
+
+    res.json({ success: true, usage: result });
+  } catch (error) {
+    console.error('Error fetching resume builder usage:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 });

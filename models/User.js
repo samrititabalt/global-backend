@@ -136,6 +136,11 @@ const userSchema = new mongoose.Schema({
     type: Boolean,
     default: true
   },
+  // Resume Builder usage tracking
+  resumeBuilderUsageRemaining: {
+    type: Number,
+    default: 10
+  },
   createdAt: {
     type: Date,
     default: Date.now
