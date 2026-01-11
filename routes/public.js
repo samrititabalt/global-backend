@@ -1,11 +1,14 @@
 const express = require('express');
 const router = express.Router();
+const path = require('path');
+const fs = require('fs');
 const Plan = require('../models/Plan');
 const { ensureDefaultPlans, formatPlanForResponse } = require('../utils/planDefaults');
 const mail = require('../utils/sendEmail');
 const { generateAIResponse } = require('../services/openaiService');
 const Lead = require('../models/Lead');
 const Activity = require('../models/Activity');
+const VideoStatus = require('../models/VideoStatus');
 
 // @route   GET /api/public/plans
 // @desc    Get all available plans (public)
@@ -318,6 +321,64 @@ router.post('/ensure-owner-customer', async (req, res) => {
       success: false,
       message: 'Server error',
       error: error.message 
+    });
+  }
+});
+
+// @route   GET /api/public/homepage-video
+// @desc    Check if homepage video exists (public endpoint for Home page)
+// @access  Public
+router.get('/homepage-video', async (req, res) => {
+  try {
+    const videoPath = path.join(process.cwd(), 'uploads', 'videos', 'homepage-video.mp4');
+    const videoExists = fs.existsSync(videoPath);
+    
+    // Get VideoStatus record
+    let videoStatus = await VideoStatus.getHomepageVideoStatus();
+    
+    // Sync status with actual file
+    if (videoExists && videoStatus.deleted) {
+      const stats = fs.statSync(videoPath);
+      videoStatus.exists = true;
+      videoStatus.deleted = false;
+      videoStatus.size = stats.size;
+      videoStatus.lastModified = stats.mtime;
+      videoStatus.deletionReason = null;
+      videoStatus.deletedAt = null;
+      await videoStatus.save();
+    }
+    
+    if (!videoExists && videoStatus.exists && !videoStatus.deleted) {
+      videoStatus.exists = false;
+      videoStatus.deleted = true;
+      videoStatus.deletionReason = videoStatus.deletionReason || 'Video file was deleted from server (unknown reason)';
+      videoStatus.deletedAt = videoStatus.deletedAt || new Date();
+      await videoStatus.save();
+    }
+    
+    if (!videoExists) {
+      return res.json({ 
+        success: true, 
+        exists: false,
+        videoPath: null
+      });
+    }
+
+    const stats = fs.statSync(videoPath);
+    const videoPathUrl = `/uploads/videos/homepage-video.mp4`;
+    
+    res.json({ 
+      success: true, 
+      exists: true,
+      videoPath: videoPathUrl
+    });
+  } catch (error) {
+    console.error('Error checking video existence:', error);
+    // Return exists: false on error to prevent blocking the page
+    res.json({ 
+      success: true, 
+      exists: false,
+      videoPath: null
     });
   }
 });

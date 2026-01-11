@@ -14,6 +14,7 @@ const AgentHoliday = require('../models/AgentHoliday');
 const AgentHours = require('../models/AgentHours');
 const ResumeBuilderUsage = require('../models/ResumeBuilderUsage');
 const Activity = require('../models/Activity');
+const VideoStatus = require('../models/VideoStatus');
 const { addTokens } = require('../services/tokenService');
 const generatePassword = require('../utils/generatePassword');
 const { sendCredentialsEmail } = require('../utils/sendEmail');
@@ -1216,15 +1217,64 @@ router.post('/homepage-video', protect, authorize('admin'), (req, res, next) => 
     }
 
     // File is already saved as homepage-video.mp4 by the middleware
-    // Multer diskStorage streams files to disk, not loading entirely into memory
-    const videoPath = `/uploads/videos/homepage-video.mp4`;
+    const videoPath = path.join(process.cwd(), 'uploads', 'videos', 'homepage-video.mp4');
+    const videoPathUrl = `/uploads/videos/homepage-video.mp4`;
+    
+    // Verify file exists
+    if (!fs.existsSync(videoPath)) {
+      return res.status(500).json({ message: 'Video file was not saved correctly' });
+    }
+
+    const stats = fs.statSync(videoPath);
+    
+    // Update or create VideoStatus record
+    let videoStatus = await VideoStatus.findOne({ videoType: 'homepage' });
+    if (!videoStatus) {
+      videoStatus = await VideoStatus.create({
+        videoType: 'homepage',
+        fileName: 'homepage-video.mp4',
+        filePath: videoPathUrl,
+        exists: true,
+        size: stats.size,
+        lastUploaded: new Date(),
+        lastModified: stats.mtime,
+        deleted: false,
+        deletionReason: null,
+        deletedAt: null
+      });
+    } else {
+      videoStatus.exists = true;
+      videoStatus.filePath = videoPathUrl;
+      videoStatus.size = stats.size;
+      videoStatus.lastUploaded = new Date();
+      videoStatus.lastModified = stats.mtime;
+      videoStatus.deleted = false;
+      videoStatus.deletionReason = null;
+      videoStatus.deletedAt = null;
+      await videoStatus.save();
+    }
+
+    // Log activity
+    await Activity.create({
+      user: req.user._id,
+      type: 'other',
+      description: `Homepage video uploaded: ${req.file.originalname} (${(stats.size / 1024 / 1024).toFixed(2)} MB)`,
+      metadata: {
+        activityType: 'video_uploaded',
+        fileName: req.file.filename,
+        originalName: req.file.originalname,
+        size: stats.size,
+        videoType: 'homepage'
+      }
+    });
     
     res.json({ 
       success: true, 
       message: 'Homepage video uploaded successfully',
-      videoPath: videoPath,
+      videoPath: videoPathUrl,
       fileName: req.file.filename,
-      size: req.file.size
+      size: stats.size,
+      lastModified: stats.mtime
     });
   } catch (error) {
     console.error('Video upload processing error:', error);
@@ -1240,11 +1290,69 @@ router.get('/homepage-video', protect, authorize('admin'), async (req, res) => {
     const videoPath = path.join(process.cwd(), 'uploads', 'videos', 'homepage-video.mp4');
     const videoExists = fs.existsSync(videoPath);
     
-    if (!videoExists) {
+    // Get or create VideoStatus record
+    let videoStatus = await VideoStatus.getHomepageVideoStatus();
+    
+    // If file exists but status says deleted, update status (video was restored)
+    if (videoExists && videoStatus.deleted) {
+      const stats = fs.statSync(videoPath);
+      videoStatus.exists = true;
+      videoStatus.deleted = false;
+      videoStatus.size = stats.size;
+      videoStatus.lastModified = stats.mtime;
+      videoStatus.deletionReason = null;
+      videoStatus.deletedAt = null;
+      await videoStatus.save();
+      
+      // Log activity
+      await Activity.create({
+        user: req.user._id,
+        type: 'other',
+        description: 'Homepage video file detected and restored',
+        metadata: {
+          activityType: 'video_restored',
+          fileName: 'homepage-video.mp4',
+          size: stats.size,
+          videoType: 'homepage'
+        }
+      });
+    }
+    
+    // If file doesn't exist but status says it exists, mark as deleted
+    if (!videoExists && videoStatus.exists && !videoStatus.deleted) {
+      const deletionReason = 'Video file was deleted from server filesystem. Possible causes: server restart, file system cleanup, manual deletion, or deployment process.';
+      videoStatus.exists = false;
+      videoStatus.deleted = true;
+      videoStatus.deletionReason = deletionReason;
+      videoStatus.deletedAt = new Date();
+      await videoStatus.save();
+      
+      // Log activity
+      await Activity.create({
+        user: req.user._id,
+        type: 'other',
+        description: 'Homepage video file was deleted from server',
+        metadata: {
+          activityType: 'video_deleted',
+          fileName: 'homepage-video.mp4',
+          deletionReason: deletionReason,
+          videoType: 'homepage'
+        }
+      });
+    }
+    
+    // Reload status from DB
+    videoStatus = await VideoStatus.findOne({ videoType: 'homepage' });
+    
+    if (!videoExists || !videoStatus.exists) {
       return res.json({ 
         success: true, 
         videoPath: null,
-        exists: false 
+        exists: false,
+        deleted: videoStatus?.deleted || false,
+        deletionReason: videoStatus?.deletionReason || 'Video file not found on server',
+        deletedAt: videoStatus?.deletedAt || null,
+        lastUploaded: videoStatus?.lastUploaded || null
       });
     }
 
@@ -1256,7 +1364,10 @@ router.get('/homepage-video', protect, authorize('admin'), async (req, res) => {
       videoPath: videoPathUrl,
       exists: true,
       size: stats.size,
-      lastModified: stats.mtime
+      lastModified: stats.mtime,
+      lastUploaded: videoStatus.lastUploaded,
+      deleted: false,
+      deletionReason: null
     });
   } catch (error) {
     console.error('Error getting video info:', error);
