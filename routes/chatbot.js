@@ -130,6 +130,163 @@ const sendAdminErrorEmail = async (errorDetails, stackTrace) => {
   }
 };
 
+// @route   POST /api/chatbot/send-chat-transcript
+// @desc    Send chat transcript email on chat close
+// @access  Public
+router.post('/send-chat-transcript', async (req, res) => {
+  try {
+    const {
+      transcript,
+      pageUrl,
+      timestamp,
+      email,
+      phone,
+      name,
+      company,
+      consent
+    } = req.body;
+
+    if (!transcript) {
+      return res.status(400).json({
+        success: false,
+        message: 'Transcript is required'
+      });
+    }
+
+    const chatTimestamp = timestamp ? new Date(timestamp) : new Date();
+    const formattedTimestamp = chatTimestamp.toISOString();
+    const subject = `New Tabalt Support Chat — ${chatTimestamp.toLocaleString()}`;
+
+    // Build contact info section
+    let contactSection = '';
+    const hasContactInfo = email || phone || name || company;
+    
+    if (hasContactInfo) {
+      contactSection = `
+        <div style="background: #e8f4f8; padding: 15px; margin: 20px 0; border-radius: 5px; border-left: 4px solid #2196F3;">
+          <h3 style="margin-top: 0;">Contact Information</h3>
+          <div style="line-height: 1.8;">
+            ${name ? `<p><strong>Name:</strong> ${name.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</p>` : ''}
+            ${email ? `<p><strong>Email:</strong> ${email.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</p>` : ''}
+            ${phone ? `<p><strong>Phone:</strong> ${phone.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</p>` : ''}
+            ${company ? `<p><strong>Company:</strong> ${company.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</p>` : ''}
+            ${consent !== undefined ? `<p><strong>Consent Provided:</strong> ${consent ? 'Yes' : 'No'}</p>` : ''}
+          </div>
+        </div>
+      `;
+    } else {
+      contactSection = `
+        <div style="background: #fff3cd; padding: 15px; margin: 20px 0; border-radius: 5px; border-left: 4px solid #ffc107;">
+          <p><strong>Note:</strong> No contact information provided by visitor.</p>
+        </div>
+      `;
+    }
+
+    const htmlContent = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="UTF-8">
+        <style>
+          body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+          .container { max-width: 800px; margin: 0 auto; padding: 20px; }
+          .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 25px; border-radius: 5px 5px 0 0; }
+          .content { background: white; padding: 25px; border: 1px solid #ddd; }
+          .info-box { background: #f5f7fa; padding: 20px; margin: 20px 0; border-radius: 5px; border-left: 4px solid #667eea; }
+          .info-row { margin: 10px 0; }
+          .info-label { font-weight: 600; color: #333; display: inline-block; min-width: 120px; }
+          .info-value { color: #666; }
+          .transcript-box { background: #f5f5f5; padding: 20px; margin: 20px 0; border-radius: 5px; border-left: 4px solid #667eea; }
+          .transcript-content { white-space: pre-wrap; font-family: 'Courier New', monospace; font-size: 13px; line-height: 1.6; color: #333; }
+          .footer { background: #f5f5f5; padding: 20px; text-align: center; font-size: 12px; color: #666; border-radius: 0 0 5px 5px; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h2 style="margin: 0;">New Tabalt Support Chat</h2>
+          </div>
+          <div class="content">
+            <p>A visitor has closed the chat window on the homepage.</p>
+            
+            <div class="info-box">
+              <div class="info-row">
+                <span class="info-label">Timestamp:</span>
+                <span class="info-value">${chatTimestamp.toLocaleString()} (${formattedTimestamp})</span>
+              </div>
+              <div class="info-row">
+                <span class="info-label">Page URL:</span>
+                <span class="info-value">${pageUrl || 'Not available'}</span>
+              </div>
+            </div>
+
+            ${contactSection}
+
+            <div class="transcript-box">
+              <h3 style="margin-top: 0;">Full Chat Transcript</h3>
+              <div class="transcript-content">${transcript.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
+            </div>
+          </div>
+          <div class="footer">
+            <p>This is an automated email from the Tabalt Support chatbot system.</p>
+            <p>Chat closed at: ${formattedTimestamp}</p>
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
+
+    // Send email with retry
+    const emailResult = await sendEmailWithRetry(ADMIN_EMAIL, subject, htmlContent);
+
+    // Log activity
+    await Activity.create({
+      type: 'chatbot_interaction',
+      description: `Chat transcript sent: Visitor closed chat${email ? ` (${email})` : ''}`,
+      metadata: {
+        pageUrl,
+        timestamp: formattedTimestamp,
+        hasContactInfo,
+        emailSent: emailResult.success
+      }
+    }).catch(err => console.error('Error creating activity:', err));
+
+    // Check for repeated failures and send admin alert
+    const failureCount = emailFailureCounts.get(ADMIN_EMAIL) || 0;
+    if (failureCount >= 3) {
+      await sendAdminErrorEmail(
+        `Email sending has failed ${failureCount} times in the last 24 hours for chat transcripts.`,
+        null
+      );
+      emailFailureCounts.set(ADMIN_EMAIL, 0); // Reset after alert
+    }
+
+    if (emailResult.success) {
+      res.json({
+        success: true,
+        message: 'Chat transcript sent successfully',
+        attempt: emailResult.attempt
+      });
+    } else {
+      // Log error but don't fail the request
+      console.error('Failed to send chat transcript email after retries:', emailResult.error);
+      res.status(500).json({
+        success: false,
+        message: 'Failed to send email after retries',
+        error: emailResult.error
+      });
+    }
+
+  } catch (error) {
+    console.error('Send chat transcript error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to process chat transcript',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
 // @route   POST /api/chatbot/lead
 // @desc    Create or update chatbot lead with full transcript and send email
 // @access  Public
