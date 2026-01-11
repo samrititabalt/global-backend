@@ -7,109 +7,16 @@ const { generateAIResponse } = require('../services/openaiService');
 const Lead = require('../models/Lead');
 const Activity = require('../models/Activity');
 
+// @route   GET /api/public/plans
+// @desc    Get all available plans (public)
+// @access  Public
 router.get('/plans', async (req, res) => {
   try {
     await ensureDefaultPlans();
     const plans = await Plan.find({ isActive: true }).sort({ price: 1 });
-    res.json({
-      success: true,
-      plans: plans.map(formatPlanForResponse),
-    });
+    res.json({ success: true, plans: plans.map(formatPlanForResponse) });
   } catch (error) {
-    console.error('Public plans error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Unable to load plans at this time.',
-    });
-  }
-});
-
-// @route   POST /api/public/send-chat-email
-// @desc    Send chat history to email
-// @access  Public
-router.post('/send-chat-email', async (req, res) => {
-  try {
-    const { to, subject, text, chatHistory } = req.body;
-
-    if (!to || !subject || !text) {
-      return res.status(400).json({
-        success: false,
-        message: 'Missing required fields: to, subject, text',
-      });
-    }
-
-    // Format chat history as HTML
-    const chatHistoryHTML = chatHistory && chatHistory.length > 0
-      ? `
-        <div style="margin-top: 20px; padding: 15px; background-color: #f5f5f5; border-radius: 5px;">
-          <h3 style="margin-bottom: 15px; color: #333;">Chat History:</h3>
-          ${chatHistory.map((msg, idx) => `
-            <div style="margin-bottom: 10px; padding: 10px; background-color: white; border-left: 3px solid ${msg.sender === 'bot' ? '#3b82f6' : '#10b981'};">
-              <strong style="color: ${msg.sender === 'bot' ? '#3b82f6' : '#10b981'};">
-                ${msg.sender === 'bot' ? 'Bot' : 'Visitor'}
-              </strong>
-              <span style="color: #666; font-size: 12px; margin-left: 10px;">
-                ${new Date(msg.timestamp).toLocaleString()}
-              </span>
-              <p style="margin-top: 5px; color: #333;">${msg.text}</p>
-            </div>
-          `).join('')}
-        </div>
-      `
-      : '';
-
-    const htmlContent = `
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <meta charset="UTF-8">
-          <style>
-            body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
-            .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-            .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; border-radius: 5px 5px 0 0; }
-            .content { background: white; padding: 20px; border: 1px solid #ddd; }
-            .footer { background: #f5f5f5; padding: 15px; text-align: center; font-size: 12px; color: #666; border-radius: 0 0 5px 5px; }
-          </style>
-        </head>
-        <body>
-          <div class="container">
-            <div class="header">
-              <h2>${subject}</h2>
-            </div>
-            <div class="content">
-              <p>${text.replace(/\n/g, '<br>')}</p>
-              ${chatHistoryHTML}
-            </div>
-            <div class="footer">
-              <p>This is an automated email from the Tabalt website chat bot.</p>
-            </div>
-          </div>
-        </body>
-      </html>
-    `;
-
-    const result = await mail(to, subject, htmlContent);
-
-    if (result.success) {
-      res.json({
-        success: true,
-        message: 'Email sent successfully',
-        messageId: result.messageId,
-      });
-    } else {
-      res.status(500).json({
-        success: false,
-        message: 'Failed to send email',
-        error: result.error,
-      });
-    }
-  } catch (error) {
-    console.error('Send chat email error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Unable to send email at this time.',
-      error: error.message,
-    });
+    res.status(500).json({ message: 'Server error', error: error.message });
   }
 });
 
@@ -212,7 +119,7 @@ router.post('/chatbot-message', async (req, res) => {
 });
 
 // @route   POST /api/public/send-contact-info
-// @desc    Send email and phone number to agent
+// @desc    Send email and phone number to agent and save as lead
 // @access  Public
 router.post('/send-contact-info', async (req, res) => {
   try {
@@ -296,21 +203,121 @@ router.post('/send-contact-info', async (req, res) => {
     if (result.success) {
       res.json({
         success: true,
-        message: 'Contact information sent successfully',
+        message: 'Contact information sent and lead saved successfully',
       });
     } else {
       res.status(500).json({
         success: false,
-        message: 'Failed to send contact information',
+        message: 'Failed to send contact information or save lead',
         error: result.error,
       });
     }
   } catch (error) {
-    console.error('Send contact info error:', error);
+    console.error('Send contact info or save lead error:', error);
     res.status(500).json({
       success: false,
-      message: 'Unable to send contact information at this time.',
+      message: 'Unable to process contact information at this time.',
       error: error.message,
+    });
+  }
+});
+
+// @route   POST /api/public/ensure-owner-customer
+// @desc    Ensure owner email has customer profile with Full Time plan
+// @access  Public (but only works for owner email)
+router.post('/ensure-owner-customer', async (req, res) => {
+  try {
+    const { email } = req.body;
+    
+    // Only allow for owner email
+    if (!email || email.toLowerCase() !== 'spbajaj25@gmail.com') {
+      return res.status(403).json({ 
+        success: false,
+        message: 'Unauthorized' 
+      });
+    }
+
+    const User = require('../models/User');
+    const Plan = require('../models/Plan');
+    const bcrypt = require('bcryptjs');
+    const generateToken = require('../utils/jwtToken');
+    const { ensureDefaultPlans } = require('../utils/planDefaults');
+
+    // Ensure default plans exist
+    await ensureDefaultPlans();
+
+    // Find or create user
+    let user = await User.findOne({ email: email.toLowerCase() });
+    let isNewUser = false;
+    
+    if (!user) {
+      // Create new user as customer
+      isNewUser = true;
+      const defaultPassword = 'sam12345';
+      const hashedPassword = await bcrypt.hash(defaultPassword, 10);
+      
+      user = await User.create({
+        name: 'Samriti Bajaj',
+        email: email.toLowerCase(),
+        phone: '0000000000', // Placeholder
+        country: 'USA', // Placeholder
+        password: hashedPassword,
+        role: 'customer'
+      });
+    }
+
+    // Find Full Time plan
+    const fullTimePlan = await Plan.findOne({ slug: 'fulltime' });
+    
+    if (!fullTimePlan) {
+      return res.status(500).json({ 
+        success: false,
+        message: 'Full Time plan not found' 
+      });
+    }
+
+    // For owner email, always ensure they have Full Time plan access
+    // If user is an agent, we don't change their role in DB, but return customer role for frontend
+    if (isNewUser || user.role === 'customer') {
+      // Assign Full Time plan if not already assigned
+      if (!user.currentPlan || user.currentPlan.toString() !== fullTimePlan._id.toString()) {
+        user.currentPlan = fullTimePlan._id;
+        user.planStatus = 'approved';
+        user.tokenBalance = fullTimePlan.tokens || 9600;
+        await user.save();
+      }
+    } else {
+      // User exists as agent - ensure they have token balance for customer features
+      // Don't change their role in DB, but ensure they have access
+      if (!user.tokenBalance || user.tokenBalance < fullTimePlan.tokens) {
+        user.tokenBalance = fullTimePlan.tokens || 9600;
+        await user.save();
+      }
+    }
+
+    // Generate token
+    const token = generateToken(user._id);
+
+    res.json({
+      success: true,
+      token,
+      user: {
+        id: user._id,
+        _id: user._id,
+        name: user.name,
+        email: user.email,
+        role: 'customer',
+        tokenBalance: user.tokenBalance,
+        currentPlan: user.currentPlan,
+        planStatus: user.planStatus
+      }
+    });
+  } catch (error) {
+    console.error('Error ensuring owner customer:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Server error',
+      error: error.message 
     });
   }
 });
