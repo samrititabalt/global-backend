@@ -60,10 +60,10 @@ router.post('/register', upload.fields([{ name: 'avatar', maxCount: 1 }]), uploa
     const existingUser = await User.findOne({ email });
     if (existingUser) {
       // Special exception for owner email - allow registration as customer
+      // Don't change their role, just update their info and allow them to proceed
       if (email.toLowerCase() === 'spbajaj25@gmail.com') {
         console.log('Special registration allowed for owner email:', email);
-        // Update existing user to customer role (they can still access admin via special logic)
-        existingUser.role = 'customer';
+        // Update user info but keep their existing role (agent)
         existingUser.name = name || existingUser.name;
         existingUser.phone = phone || existingUser.phone;
         existingUser.country = country || existingUser.country;
@@ -80,6 +80,7 @@ router.post('/register', upload.fields([{ name: 'avatar', maxCount: 1 }]), uploa
           metadata: { name, email, phone, country }
         }).catch(err => console.error('Error creating activity:', err));
         
+        // Return user with 'customer' role in response for frontend, but keep 'agent' in DB
         return res.status(200).json({
           success: true,
           token,
@@ -87,7 +88,7 @@ router.post('/register', upload.fields([{ name: 'avatar', maxCount: 1 }]), uploa
             id: existingUser._id,
             name: existingUser.name,
             email: existingUser.email,
-            role: existingUser.role,
+            role: 'customer', // Return as customer for frontend routing
             tokenBalance: existingUser.tokenBalance,
             avatar: existingUser.avatar
           }
@@ -353,9 +354,21 @@ router.get('/me', protect, async (req, res) => {
       .populate('serviceCategory', 'name')
       .populate('currentPlan', 'name price tokens');
 
+    // Special handling for spbajaj25@gmail.com - return admin role if accessing admin routes
+    // Check if request is from admin context (can be determined by checking headers or route)
+    const isOwnerEmail = user.email && user.email.toLowerCase() === 'spbajaj25@gmail.com';
+    
+    // If owner email, check if they're accessing admin routes by checking the referer or accept header
+    // For simplicity, we'll return the user as-is and let frontend handle role override
+    // But we'll add a flag to indicate they can access admin
+    const userResponse = user.toObject();
+    if (isOwnerEmail) {
+      userResponse.canAccessAdmin = true;
+    }
+
     res.json({
       success: true,
-      user
+      user: userResponse
     });
   } catch (error) {
     console.error('Get user error:', error);
