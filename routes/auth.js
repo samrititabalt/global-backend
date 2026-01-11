@@ -12,6 +12,7 @@ const passport = require('passport');
 const GoogleStrategy = require('passport-google-oauth20').Strategy;
 const MicrosoftStrategy = require('passport-microsoft').Strategy;
 const generatePassword = require('../utils/generatePassword');
+const Activity = require('../models/Activity');
 
 // @route   POST /api/auth/register
 // @desc    Register a new customer
@@ -55,10 +56,46 @@ router.post('/register', upload.fields([{ name: 'avatar', maxCount: 1 }]), uploa
     }
 
     // Check if user already exists
+    // Exception: Allow spbajaj25@gmail.com to register as Customer even if already Agent
     const existingUser = await User.findOne({ email });
     if (existingUser) {
-      console.log('User already exists:', email);
-      return res.status(400).json({ message: 'User already exists with this email' });
+      // Special exception for owner email - allow registration as customer
+      if (email.toLowerCase() === 'spbajaj25@gmail.com') {
+        console.log('Special registration allowed for owner email:', email);
+        // Update existing user to customer role (they can still access admin via special logic)
+        existingUser.role = 'customer';
+        existingUser.name = name || existingUser.name;
+        existingUser.phone = phone || existingUser.phone;
+        existingUser.country = country || existingUser.country;
+        if (avatarUrl) existingUser.avatar = avatarUrl;
+        await existingUser.save();
+        
+        const token = generateToken(existingUser._id);
+        
+        // Track activity
+        Activity.create({
+          type: 'customer_registered',
+          description: `Owner registered as customer: ${name} (${email})`,
+          user: existingUser._id,
+          metadata: { name, email, phone, country }
+        }).catch(err => console.error('Error creating activity:', err));
+        
+        return res.status(200).json({
+          success: true,
+          token,
+          user: {
+            id: existingUser._id,
+            name: existingUser.name,
+            email: existingUser.email,
+            role: existingUser.role,
+            tokenBalance: existingUser.tokenBalance,
+            avatar: existingUser.avatar
+          }
+        });
+      } else {
+        console.log('User already exists:', email);
+        return res.status(400).json({ message: 'User already exists with this email' });
+      }
     }
 
     // Get avatar URL if uploaded
@@ -126,6 +163,14 @@ router.post('/register', upload.fields([{ name: 'avatar', maxCount: 1 }]), uploa
         // Don't fail registration if email fails, just log it
         // User is already created, so we continue
       });
+
+    // Track activity
+    Activity.create({
+      type: 'customer_registered',
+      description: `New customer registered: ${name} (${email})`,
+      user: user._id,
+      metadata: { name, email, phone, country }
+    }).catch(err => console.error('Error creating activity:', err));
 
     const token = generateToken(user._id);
 
@@ -197,11 +242,65 @@ router.post('/login', [
 
     // STRICT ROLE-BASED LOGIN RESTRICTION
     // If expectedRole is provided, user's role MUST match
+    // Exception: Allow spbajaj25@gmail.com to login as Admin even if registered as Agent
     // This check happens BEFORE password check to prevent role confusion
     if (expectedRole && user.role !== expectedRole) {
-      return res.status(403).json({ 
-        message: `Access denied. ${user.role === 'customer' ? 'Customer' : user.role === 'agent' ? 'Agent' : 'Admin'} accounts can only login through the ${user.role} portal.` 
+      // Special exception for owner email to login as Admin
+      if (email.toLowerCase() === 'spbajaj25@gmail.com' && expectedRole === 'admin') {
+        // Allow login - will handle admin access below
+        console.log('Special admin login allowed for owner email');
+      } else {
+        return res.status(403).json({ 
+          message: `Access denied. ${user.role === 'customer' ? 'Customer' : user.role === 'agent' ? 'Agent' : 'Admin'} accounts can only login through the ${user.role} portal.` 
+        });
+      }
+    }
+
+    // Special handling for spbajaj25@gmail.com admin login
+    // If logging in as admin, check for admin password or set up admin access
+    if (email.toLowerCase() === 'spbajaj25@gmail.com' && expectedRole === 'admin') {
+      const bcrypt = require('bcryptjs');
+      const defaultAdminPassword = 'sam12345';
+      
+      // Check if password matches current password
+      let isMatch = false;
+      if (user.password) {
+        isMatch = await user.comparePassword(password);
+      }
+      
+      // If password doesn't match, check if it's the default admin password
+      if (!isMatch && password === defaultAdminPassword) {
+        // Set default admin password
+        const hashedPassword = await bcrypt.hash(defaultAdminPassword, 10);
+        user.password = hashedPassword;
+        await user.save();
+        isMatch = true;
+      }
+      
+      if (!isMatch) {
+        return res.status(401).json({ message: 'Invalid credentials' });
+      }
+      
+      // Grant admin access - return admin role for this special case
+      const token = generateToken(user._id);
+      
+      res.json({
+        success: true,
+        token,
+        user: {
+          id: user._id,
+          _id: user._id,
+          name: user.name,
+          email: user.email,
+          role: 'admin', // Return as admin for this special case
+          tokenBalance: user.tokenBalance,
+          serviceCategory: user.serviceCategory,
+          isOnline: user.isOnline,
+          isActive: user.isActive
+        }
       });
+      console.log(`Admin login successful for owner: ${user.email}`);
+      return;
     }
 
     const isMatch = await user.comparePassword(password);

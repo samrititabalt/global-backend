@@ -13,6 +13,7 @@ const Lead = require('../models/Lead');
 const AgentHoliday = require('../models/AgentHoliday');
 const AgentHours = require('../models/AgentHours');
 const ResumeBuilderUsage = require('../models/ResumeBuilderUsage');
+const Activity = require('../models/Activity');
 const { addTokens } = require('../services/tokenService');
 const generatePassword = require('../utils/generatePassword');
 const { sendCredentialsEmail } = require('../utils/sendEmail');
@@ -356,6 +357,14 @@ router.post('/agents', protect, authorize('admin'), upload.fields([{ name: 'avat
     agent.customerId = undefined;
     await agent.save();
     console.log(`✅ Agent created successfully: ${agent._id}`);
+
+    // Track activity
+    Activity.create({
+      type: 'agent_registered',
+      description: `New agent registered: ${name} (${email})`,
+      user: agent._id,
+      metadata: { name, email, phone, country, serviceCategories: uniqueServiceIds }
+    }).catch(err => console.error('Error creating activity:', err));
 
     // Send credentials email (only if password was auto-generated)
     if (!req.body.password || req.body.password.trim() === '') {
@@ -1679,6 +1688,39 @@ router.get('/agent-management/calendar', protect, authorize('admin'), async (req
     });
   } catch (error) {
     console.error('Error fetching calendar data:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// ========== RECENT ACTIVITY ==========
+
+// @route   GET /api/admin/activities
+// @desc    Get all activities
+// @access  Private (Admin)
+router.get('/activities', protect, authorize('admin'), async (req, res) => {
+  try {
+    const { type, date } = req.query;
+    
+    let query = {};
+    if (type && type !== 'all') {
+      query.type = type;
+    }
+    if (date) {
+      const startDate = new Date(date);
+      startDate.setHours(0, 0, 0, 0);
+      const endDate = new Date(date);
+      endDate.setHours(23, 59, 59, 999);
+      query.createdAt = { $gte: startDate, $lte: endDate };
+    }
+    
+    const activities = await Activity.find(query)
+      .populate('user', 'name email role')
+      .sort({ createdAt: -1 })
+      .limit(100); // Limit to last 100 activities
+    
+    res.json({ success: true, activities });
+  } catch (error) {
+    console.error('Error fetching activities:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 });

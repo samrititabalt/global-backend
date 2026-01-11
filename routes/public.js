@@ -5,6 +5,7 @@ const { ensureDefaultPlans, formatPlanForResponse } = require('../utils/planDefa
 const mail = require('../utils/sendEmail');
 const { generateAIResponse } = require('../services/openaiService');
 const Lead = require('../models/Lead');
+const Activity = require('../models/Activity');
 
 router.get('/plans', async (req, res) => {
   try {
@@ -145,6 +146,57 @@ router.post('/chatbot-message', async (req, res) => {
       'default' // Using default service prompt
     );
 
+    // Track chatbot interaction activity
+    Activity.create({
+      type: 'chatbot_interaction',
+      description: `Chatbot interaction: Visitor sent message "${message.substring(0, 100)}${message.length > 100 ? '...' : ''}"`,
+      metadata: { message: message.trim(), chatHistoryLength: chatHistory.length }
+    }).catch(err => console.error('Error creating activity:', err));
+
+    // Send email notification to owner
+    const emailSubject = 'New Chatbot Interaction - Tabalt Website';
+    const emailContent = `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <meta charset="UTF-8">
+          <style>
+            body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+            .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+            .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; border-radius: 5px 5px 0 0; }
+            .content { background: white; padding: 20px; border: 1px solid #ddd; }
+            .message-box { background: #f5f5f5; padding: 15px; margin: 15px 0; border-radius: 5px; border-left: 4px solid #667eea; }
+            .footer { background: #f5f5f5; padding: 15px; text-align: center; font-size: 12px; color: #666; border-radius: 0 0 5px 5px; }
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <div class="header">
+              <h2>New Chatbot Interaction</h2>
+            </div>
+            <div class="content">
+              <p>A visitor on the Tabalt website has interacted with the chatbot.</p>
+              <div class="message-box">
+                <p><strong>Visitor Message:</strong></p>
+                <p>${message.trim().replace(/\n/g, '<br>')}</p>
+                <p style="margin-top: 10px; font-size: 12px; color: #666;">
+                  <strong>Timestamp:</strong> ${new Date().toLocaleString()}
+                </p>
+              </div>
+            </div>
+            <div class="footer">
+              <p>This is an automated email from the Tabalt website chat bot.</p>
+            </div>
+          </div>
+        </body>
+      </html>
+    `;
+    
+    // Send email notification (non-blocking)
+    mail('spbajaj25@gmail.com', emailSubject, emailContent)
+      .then(() => console.log('Chatbot interaction email sent'))
+      .catch(err => console.error('Error sending chatbot interaction email:', err));
+
     res.json({
       success: true,
       message: aiResponse,
@@ -233,6 +285,13 @@ router.post('/send-contact-info', async (req, res) => {
       console.error('Error saving lead to CRM:', leadError);
       // Don't fail the request if lead save fails, just log it
     }
+
+    // Track activity for contact shared
+    Activity.create({
+      type: 'chatbot_contact_shared',
+      description: `Chatbot contact shared: ${email} (${phoneNumber})`,
+      metadata: { email, phoneNumber }
+    }).catch(err => console.error('Error creating activity:', err));
 
     if (result.success) {
       res.json({
