@@ -91,6 +91,7 @@ app.use('/api/call', require('./routes/call'));
 app.use('/api/payment', require('./routes/payment'));
 app.use('/api/facebook-ads', require('./routes/facebookAds'));
 app.use('/api/resume-builder', require('./routes/resumeBuilder'));
+app.use('/api/expense-monitor', require('./routes/expenseMonitor'));
 
 // Redirect common OAuth routes that are missing /api prefix
 app.get('/auth/google', (req, res) => {
