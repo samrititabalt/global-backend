@@ -1239,7 +1239,35 @@ router.post('/homepage-video', protect, authorize('admin'), (req, res, next) => 
     }
 
     // Upload to Cloudinary
-    const cloudinaryResult = await uploadVideo(fileBuffer, 'homepage-media/videos', fileMimeType);
+    let cloudinaryResult;
+    try {
+      cloudinaryResult = await uploadVideo(fileBuffer, 'homepage-media/videos', fileMimeType);
+      console.log('[Admin] Video uploaded to Cloudinary:', cloudinaryResult.url);
+    } catch (cloudinaryError) {
+      console.error('[Admin] Cloudinary upload error:', cloudinaryError);
+      
+      // Clean up local file
+      try {
+        if (fs.existsSync(req.file.path)) {
+          fs.unlinkSync(req.file.path);
+        }
+      } catch (unlinkError) {
+        console.warn('Error deleting local video file:', unlinkError.message);
+      }
+      
+      // Check if it's a credentials issue
+      if (cloudinaryError.message && cloudinaryError.message.includes('Invalid API')) {
+        return res.status(500).json({ 
+          message: 'Cloudinary credentials not configured. Please set CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, and CLOUDINARY_API_SECRET in your .env file.',
+          error: 'CLOUDINARY_CONFIG_ERROR'
+        });
+      }
+      
+      return res.status(500).json({ 
+        message: `Failed to upload video to Cloudinary: ${cloudinaryError.message || 'Unknown error'}`,
+        error: cloudinaryError.message || 'CLOUDINARY_UPLOAD_ERROR'
+      });
+    }
     
     // Delete local file after successful Cloudinary upload
     try {

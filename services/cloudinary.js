@@ -32,14 +32,14 @@ const uploadToCloudinary = async (file, options = {}) => {
       ...options,
     };
 
-    // If file is a buffer, convert to base64 or use upload_stream
+    // If file is a buffer, use upload_stream for better memory efficiency (especially for large videos)
     if (Buffer.isBuffer(file)) {
-      // Convert buffer to base64 data URI for upload
-      const base64Data = file.toString('base64');
-      const dataUri = `data:${options.mimeType || 'application/octet-stream'};base64,${base64Data}`;
+      // For large files (videos), use upload_stream instead of base64
+      // This is more memory efficient and handles large files better
+      const { Readable } = require('stream');
+      const stream = Readable.from(file);
       
-      cloudinary.uploader.upload(
-        dataUri,
+      const uploadStream = cloudinary.uploader.upload_stream(
         uploadOptions,
         (error, result) => {
           if (error) {
@@ -50,6 +50,8 @@ const uploadToCloudinary = async (file, options = {}) => {
           }
         }
       );
+      
+      stream.pipe(uploadStream);
     } else {
       // File is already a stream
       const stream = cloudinary.uploader.upload_stream(
@@ -166,12 +168,22 @@ const uploadFile = async (file, folder = 'chat-media/files', mimeType = 'applica
  */
 const uploadVideo = async (file, folder = 'homepage-media/videos', mimeType = 'video/mp4') => {
   try {
+    // Check if Cloudinary is configured
+    if (!process.env.CLOUDINARY_CLOUD_NAME || !process.env.CLOUDINARY_API_KEY || !process.env.CLOUDINARY_API_SECRET) {
+      throw new Error('Cloudinary credentials not configured. Please set CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, and CLOUDINARY_API_SECRET in your .env file.');
+    }
+
+    console.log('[Cloudinary] Uploading video to folder:', folder);
+    console.log('[Cloudinary] File size:', file.length, 'bytes');
+    
     const result = await uploadToCloudinary(file, {
       folder,
       resource_type: 'video',
       mimeType,
       chunk_size: 6000000, // 6MB chunks for large videos
     });
+
+    console.log('[Cloudinary] Video uploaded successfully:', result.secure_url);
 
     return {
       url: result.secure_url,
@@ -183,8 +195,17 @@ const uploadVideo = async (file, folder = 'homepage-media/videos', mimeType = 'v
       height: result.height,
     };
   } catch (error) {
-    console.error('Video upload error:', error);
-    throw error;
+    console.error('[Cloudinary] Video upload error:', error);
+    
+    // Provide more helpful error messages
+    if (error.message && error.message.includes('Invalid API')) {
+      throw new Error('Invalid Cloudinary API credentials. Please check your CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET.');
+    }
+    if (error.message && error.message.includes('not configured')) {
+      throw error; // Re-throw configuration errors as-is
+    }
+    
+    throw new Error(`Cloudinary upload failed: ${error.message || 'Unknown error'}`);
   }
 };
 
