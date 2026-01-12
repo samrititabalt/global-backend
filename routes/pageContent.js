@@ -1,7 +1,35 @@
 const express = require('express');
 const router = express.Router();
 const PageContent = require('../models/PageContent');
-const { authenticateToken } = require('../middleware/auth');
+const { protect } = require('../middleware/auth');
+
+// Get all pages with content (admin only - for content management dashboard)
+// IMPORTANT: This route must come BEFORE /:pagePath to avoid route conflicts
+router.get('/admin/all', protect, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Only admins can access this endpoint' 
+      });
+    }
+    
+    const allPages = await PageContent.find({})
+      .populate('updatedBy', 'name email')
+      .sort({ lastUpdated: -1 });
+    
+    res.json({ 
+      success: true, 
+      pages: allPages 
+    });
+  } catch (error) {
+    console.error('Error fetching all page content:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to fetch page content' 
+    });
+  }
+});
 
 // Get content for a specific page (public - for rendering)
 router.get('/:pagePath', async (req, res) => {
@@ -35,7 +63,7 @@ router.get('/:pagePath', async (req, res) => {
 });
 
 // Update content for a page (admin only)
-router.put('/:pagePath', authenticateToken, async (req, res) => {
+router.put('/:pagePath', protect, async (req, res) => {
   try {
     // Check if user is admin
     if (req.user.role !== 'admin') {
@@ -92,33 +120,6 @@ router.put('/:pagePath', authenticateToken, async (req, res) => {
     res.status(500).json({ 
       success: false, 
       message: 'Failed to update page content' 
-    });
-  }
-});
-
-// Get all pages with content (admin only - for content management dashboard)
-router.get('/admin/all', authenticateToken, async (req, res) => {
-  try {
-    if (req.user.role !== 'admin') {
-      return res.status(403).json({ 
-        success: false, 
-        message: 'Only admins can access this endpoint' 
-      });
-    }
-    
-    const allPages = await PageContent.find({})
-      .populate('updatedBy', 'name email')
-      .sort({ lastUpdated: -1 });
-    
-    res.json({ 
-      success: true, 
-      pages: allPages 
-    });
-  } catch (error) {
-    console.error('Error fetching all page content:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Failed to fetch page content' 
     });
   }
 });
