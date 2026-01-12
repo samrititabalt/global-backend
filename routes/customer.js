@@ -6,6 +6,7 @@ const Plan = require('../models/Plan');
 const Service = require('../models/Service');
 const ChatSession = require('../models/ChatSession');
 const Message = require('../models/Message');
+const CustomServiceRequest = require('../models/CustomServiceRequest');
 const { checkTokenBalance } = require('../services/tokenService');
 const { ensureDefaultPlans, formatPlanForResponse } = require('../utils/planDefaults');
 const { notifyAgentsForNewChat } = require('../services/agentNotificationService');
@@ -232,6 +233,45 @@ router.get('/token-balance', protect, authorize('customer'), async (req, res) =>
     });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   POST /api/customer/custom-service-request
+// @desc    Submit a custom service request
+// @access  Private (Customer)
+router.post('/custom-service-request', protect, authorize('customer'), async (req, res) => {
+  try {
+    const { requestDetails, customerName, customerEmail, plan, tokenBalance, timestamp } = req.body;
+    const customer = req.user;
+
+    if (!requestDetails || !requestDetails.trim()) {
+      return res.status(400).json({ 
+        success: false,
+        message: 'Request details are required' 
+      });
+    }
+
+    const customRequest = await CustomServiceRequest.create({
+      customer: customer._id,
+      customerName: customerName || customer.name,
+      customerEmail: customerEmail || customer.email,
+      requestDetails: requestDetails.trim(),
+      plan: plan || (customer.currentPlan ? customer.currentPlan.toString() : 'No plan'),
+      tokenBalance: tokenBalance || customer.tokenBalance || 0
+    });
+
+    res.json({ 
+      success: true, 
+      message: 'Custom service request submitted successfully',
+      request: customRequest 
+    });
+  } catch (error) {
+    console.error('Custom service request error:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Server error', 
+      error: error.message 
+    });
   }
 });
 

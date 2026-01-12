@@ -15,6 +15,7 @@ const AgentHours = require('../models/AgentHours');
 const ResumeBuilderUsage = require('../models/ResumeBuilderUsage');
 const Activity = require('../models/Activity');
 const VideoStatus = require('../models/VideoStatus');
+const CustomServiceRequest = require('../models/CustomServiceRequest');
 const { addTokens } = require('../services/tokenService');
 const generatePassword = require('../utils/generatePassword');
 const { sendCredentialsEmail } = require('../utils/sendEmail');
@@ -1928,6 +1929,47 @@ router.get('/resume-builder/usage', protect, authorize('admin'), async (req, res
     res.json({ success: true, usage: result });
   } catch (error) {
     console.error('Error fetching resume builder usage:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   GET /api/admin/custom-service-requests
+// @desc    Get all custom service requests
+// @access  Private (Admin)
+router.get('/custom-service-requests', protect, authorize('admin'), async (req, res) => {
+  try {
+    const requests = await CustomServiceRequest.find({})
+      .populate('customer', 'name email')
+      .populate('reviewedBy', 'name email')
+      .sort({ createdAt: -1 });
+    
+    res.json({ success: true, requests });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   PUT /api/admin/custom-service-requests/:id
+// @desc    Update custom service request status
+// @access  Private (Admin)
+router.put('/custom-service-requests/:id', protect, authorize('admin'), async (req, res) => {
+  try {
+    const { status, adminNotes } = req.body;
+    const request = await CustomServiceRequest.findById(req.params.id);
+    
+    if (!request) {
+      return res.status(404).json({ success: false, message: 'Request not found' });
+    }
+    
+    request.status = status || request.status;
+    request.adminNotes = adminNotes || request.adminNotes;
+    request.reviewedAt = new Date();
+    request.reviewedBy = req.user._id;
+    
+    await request.save();
+    
+    res.json({ success: true, request });
+  } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 });
