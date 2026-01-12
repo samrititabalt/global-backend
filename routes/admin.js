@@ -1188,10 +1188,18 @@ router.delete('/timesheets/:id', protect, authorize('admin'), async (req, res) =
 // @desc    Upload homepage background video
 // @access  Private (Admin)
 router.post('/homepage-video', protect, authorize('admin'), (req, res, next) => {
+  console.log('[Admin] Video upload request received');
+  console.log('[Admin] Request headers:', {
+    'content-type': req.headers['content-type'],
+    'content-length': req.headers['content-length']
+  });
+  console.log('[Admin] Request body keys:', Object.keys(req.body || {}));
+  console.log('[Admin] Request files:', req.files);
+  
   videoUpload.single('video')(req, res, (err) => {
     // Handle multer errors before processing
     if (err) {
-      console.error('Multer upload error:', err);
+      console.error('[Admin] Multer upload error:', err);
       if (err.code === 'LIMIT_FILE_SIZE') {
         return res.status(400).json({ 
           message: 'Video file is too large. Maximum size is 200MB.',
@@ -1209,12 +1217,34 @@ router.post('/homepage-video', protect, authorize('admin'), (req, res, next) => 
         error: err.code || 'UPLOAD_ERROR'
       });
     }
+    
+    console.log('[Admin] Multer processed file:', req.file ? {
+      fieldname: req.file.fieldname,
+      originalname: req.file.originalname,
+      mimetype: req.file.mimetype,
+      size: req.file.size,
+      path: req.file.path
+    } : 'No file');
+    
     next();
   });
 }, async (req, res) => {
   try {
+    console.log('[Admin] Processing video upload, req.file:', req.file ? 'exists' : 'missing');
+    console.log('[Admin] req.files:', req.files);
+    console.log('[Admin] req.body:', req.body);
+    
     if (!req.file) {
-      return res.status(400).json({ message: 'No video file uploaded' });
+      console.error('[Admin] No file in request. Request details:', {
+        hasFile: !!req.file,
+        hasFiles: !!req.files,
+        bodyKeys: Object.keys(req.body || {}),
+        contentType: req.headers['content-type']
+      });
+      return res.status(400).json({ 
+        message: 'No video file uploaded. Please select a video file and try again.',
+        error: 'NO_FILE'
+      });
     }
 
     // Verify file exists before reading
