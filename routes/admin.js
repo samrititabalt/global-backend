@@ -20,6 +20,7 @@ const generatePassword = require('../utils/generatePassword');
 const { sendCredentialsEmail } = require('../utils/sendEmail');
 const { upload, uploadToCloudinary } = require('../middleware/cloudinaryUpload');
 const { videoUpload } = require('../middleware/upload');
+const { uploadVideo, deleteFromCloudinary } = require('../services/cloudinary');
 const path = require('path');
 const fs = require('fs');
 
@@ -1216,38 +1217,62 @@ router.post('/homepage-video', protect, authorize('admin'), (req, res, next) => 
       return res.status(400).json({ message: 'No video file uploaded' });
     }
 
-    // File is already saved as homepage-video.mp4 by the middleware
-    const videoPath = path.join(process.cwd(), 'uploads', 'videos', 'homepage-video.mp4');
-    const videoPathUrl = `/uploads/videos/homepage-video.mp4`;
-    
-    // Verify file exists
-    if (!fs.existsSync(videoPath)) {
+    // Verify file exists before reading
+    if (!fs.existsSync(req.file.path)) {
       return res.status(500).json({ message: 'Video file was not saved correctly' });
     }
 
-    const stats = fs.statSync(videoPath);
-    
-    // Update or create VideoStatus record
+    // Read file buffer for Cloudinary upload
+    const fileBuffer = fs.readFileSync(req.file.path);
+    const fileMimeType = req.file.mimetype || 'video/mp4';
+
+    // Get existing video status to delete old Cloudinary file if exists
     let videoStatus = await VideoStatus.findOne({ videoType: 'homepage' });
+    if (videoStatus && videoStatus.cloudinaryPublicId) {
+      try {
+        await deleteFromCloudinary(videoStatus.cloudinaryPublicId, 'video');
+        console.log('Deleted old video from Cloudinary:', videoStatus.cloudinaryPublicId);
+      } catch (deleteError) {
+        console.warn('Error deleting old video from Cloudinary:', deleteError.message);
+        // Continue even if deletion fails
+      }
+    }
+
+    // Upload to Cloudinary
+    const cloudinaryResult = await uploadVideo(fileBuffer, 'homepage-media/videos', fileMimeType);
+    
+    // Delete local file after successful Cloudinary upload
+    try {
+      if (fs.existsSync(req.file.path)) {
+        fs.unlinkSync(req.file.path);
+      }
+    } catch (unlinkError) {
+      console.warn('Error deleting local video file:', unlinkError.message);
+    }
+
+    // Update or create VideoStatus record with Cloudinary URL
     if (!videoStatus) {
       videoStatus = await VideoStatus.create({
         videoType: 'homepage',
-        fileName: 'homepage-video.mp4',
-        filePath: videoPathUrl,
+        fileName: req.file.originalname || 'homepage-video.mp4',
+        cloudinaryUrl: cloudinaryResult.url,
+        cloudinaryPublicId: cloudinaryResult.publicId,
         exists: true,
-        size: stats.size,
+        size: cloudinaryResult.bytes,
         lastUploaded: new Date(),
-        lastModified: stats.mtime,
+        lastModified: new Date(),
         deleted: false,
         deletionReason: null,
         deletedAt: null
       });
     } else {
       videoStatus.exists = true;
-      videoStatus.filePath = videoPathUrl;
-      videoStatus.size = stats.size;
+      videoStatus.fileName = req.file.originalname || 'homepage-video.mp4';
+      videoStatus.cloudinaryUrl = cloudinaryResult.url;
+      videoStatus.cloudinaryPublicId = cloudinaryResult.publicId;
+      videoStatus.size = cloudinaryResult.bytes;
       videoStatus.lastUploaded = new Date();
-      videoStatus.lastModified = stats.mtime;
+      videoStatus.lastModified = new Date();
       videoStatus.deleted = false;
       videoStatus.deletionReason = null;
       videoStatus.deletedAt = null;
@@ -1258,26 +1283,36 @@ router.post('/homepage-video', protect, authorize('admin'), (req, res, next) => 
     await Activity.create({
       user: req.user._id,
       type: 'other',
-      description: `Homepage video uploaded: ${req.file.originalname} (${(stats.size / 1024 / 1024).toFixed(2)} MB)`,
+      description: `Homepage video uploaded to Cloudinary: ${req.file.originalname} (${(cloudinaryResult.bytes / 1024 / 1024).toFixed(2)} MB)`,
       metadata: {
         activityType: 'video_uploaded',
-        fileName: req.file.filename,
-        originalName: req.file.originalname,
-        size: stats.size,
-        videoType: 'homepage'
+        fileName: req.file.originalname,
+        size: cloudinaryResult.bytes,
+        videoType: 'homepage',
+        cloudinaryPublicId: cloudinaryResult.publicId
       }
     });
     
     res.json({ 
       success: true, 
-      message: 'Homepage video uploaded successfully',
-      videoPath: videoPathUrl,
-      fileName: req.file.filename,
-      size: stats.size,
-      lastModified: stats.mtime
+      message: 'Homepage video uploaded successfully to Cloudinary',
+      videoUrl: cloudinaryResult.url,
+      fileName: req.file.originalname,
+      size: cloudinaryResult.bytes,
+      lastUploaded: new Date()
     });
   } catch (error) {
     console.error('Video upload processing error:', error);
+    
+    // Clean up local file if upload failed
+    if (req.file && req.file.path && fs.existsSync(req.file.path)) {
+      try {
+        fs.unlinkSync(req.file.path);
+      } catch (unlinkError) {
+        console.warn('Error cleaning up local file:', unlinkError.message);
+      }
+    }
+    
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 });
@@ -1287,88 +1322,40 @@ router.post('/homepage-video', protect, authorize('admin'), (req, res, next) => 
 // @access  Private (Admin)
 router.get('/homepage-video', protect, authorize('admin'), async (req, res) => {
   try {
-    const videoPath = path.join(process.cwd(), 'uploads', 'videos', 'homepage-video.mp4');
-    const videoExists = fs.existsSync(videoPath);
-    
-    // Get or create VideoStatus record
+    // Get VideoStatus record
     let videoStatus = await VideoStatus.getHomepageVideoStatus();
     
-    // If file exists but status says deleted, update status (video was restored)
-    if (videoExists && videoStatus.deleted) {
-      const stats = fs.statSync(videoPath);
-      videoStatus.exists = true;
-      videoStatus.deleted = false;
-      videoStatus.size = stats.size;
-      videoStatus.lastModified = stats.mtime;
-      videoStatus.deletionReason = null;
-      videoStatus.deletedAt = null;
-      await videoStatus.save();
-      
-      // Log activity
-      await Activity.create({
-        user: req.user._id,
-        type: 'other',
-        description: 'Homepage video file detected and restored',
-        metadata: {
-          activityType: 'video_restored',
-          fileName: 'homepage-video.mp4',
-          size: stats.size,
-          videoType: 'homepage'
-        }
-      });
-    }
-    
-    // If file doesn't exist but status says it exists, mark as deleted
-    if (!videoExists && videoStatus.exists && !videoStatus.deleted) {
-      const deletionReason = 'Video file was deleted from server filesystem. Possible causes: server restart, file system cleanup, manual deletion, or deployment process.';
-      videoStatus.exists = false;
-      videoStatus.deleted = true;
-      videoStatus.deletionReason = deletionReason;
-      videoStatus.deletedAt = new Date();
-      await videoStatus.save();
-      
-      // Log activity
-      await Activity.create({
-        user: req.user._id,
-        type: 'other',
-        description: 'Homepage video file was deleted from server',
-        metadata: {
-          activityType: 'video_deleted',
-          fileName: 'homepage-video.mp4',
-          deletionReason: deletionReason,
-          videoType: 'homepage'
-        }
-      });
-    }
-    
-    // Reload status from DB
-    videoStatus = await VideoStatus.findOne({ videoType: 'homepage' });
-    
-    if (!videoExists || !videoStatus.exists) {
-      return res.json({ 
-        success: true, 
-        videoPath: null,
-        exists: false,
-        deleted: videoStatus?.deleted || false,
-        deletionReason: videoStatus?.deletionReason || 'Video file not found on server',
-        deletedAt: videoStatus?.deletedAt || null,
-        lastUploaded: videoStatus?.lastUploaded || null
-      });
-    }
-
-    const stats = fs.statSync(videoPath);
-    const videoPathUrl = `/uploads/videos/homepage-video.mp4`;
-    
-    res.json({ 
-      success: true, 
-      videoPath: videoPathUrl,
-      exists: true,
-      size: stats.size,
-      lastModified: stats.mtime,
+    const videoInfo = {
+      exists: videoStatus.exists && !videoStatus.deleted,
+      deleted: videoStatus.deleted,
+      deletionReason: videoStatus.deletionReason,
       lastUploaded: videoStatus.lastUploaded,
-      deleted: false,
-      deletionReason: null
-    });
+      size: videoStatus.size,
+      fileName: videoStatus.fileName,
+      cloudinaryUrl: videoStatus.cloudinaryUrl || null,
+      cloudinaryPublicId: videoStatus.cloudinaryPublicId || null
+    };
+    
+    // If Cloudinary URL exists, use it
+    if (videoStatus.cloudinaryUrl) {
+      videoInfo.videoUrl = videoStatus.cloudinaryUrl;
+      videoInfo.storage = 'cloudinary';
+    } else {
+      // Fallback to local file check (for backward compatibility)
+      const videoPath = path.join(process.cwd(), 'uploads', 'videos', 'homepage-video.mp4');
+      const videoExists = fs.existsSync(videoPath);
+      
+      if (videoExists) {
+        const stats = fs.statSync(videoPath);
+        videoInfo.lastModified = stats.mtime;
+        videoInfo.videoPath = `/uploads/videos/homepage-video.mp4`;
+        videoInfo.storage = 'local';
+      } else {
+        videoInfo.storage = 'none';
+      }
+    }
+    
+    res.json({ success: true, videoInfo });
   } catch (error) {
     console.error('Error getting video info:', error);
     res.status(500).json({ message: 'Server error', error: error.message });

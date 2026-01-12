@@ -158,6 +158,37 @@ const uploadFile = async (file, folder = 'chat-media/files', mimeType = 'applica
 };
 
 /**
+ * Upload video to Cloudinary
+ * @param {Buffer|Stream} file - Video file
+ * @param {String} folder - Folder path in Cloudinary
+ * @param {String} mimeType - MIME type of the file
+ * @returns {Promise} Upload result with secure_url
+ */
+const uploadVideo = async (file, folder = 'homepage-media/videos', mimeType = 'video/mp4') => {
+  try {
+    const result = await uploadToCloudinary(file, {
+      folder,
+      resource_type: 'video',
+      mimeType,
+      chunk_size: 6000000, // 6MB chunks for large videos
+    });
+
+    return {
+      url: result.secure_url,
+      publicId: result.public_id,
+      duration: result.duration,
+      format: result.format,
+      bytes: result.bytes,
+      width: result.width,
+      height: result.height,
+    };
+  } catch (error) {
+    console.error('Video upload error:', error);
+    throw error;
+  }
+};
+
+/**
  * Delete file from Cloudinary
  * @param {String} publicId - Public ID of the file
  * @param {String} resourceType - Resource type (image, video, raw)
@@ -179,6 +210,7 @@ module.exports = {
   uploadImage,
   uploadAudio,
   uploadFile,
+  uploadVideo,
   uploadToCloudinary,
   deleteFromCloudinary,
 };

@@ -330,11 +330,21 @@ router.post('/ensure-owner-customer', async (req, res) => {
 // @access  Public
 router.get('/homepage-video', async (req, res) => {
   try {
-    const videoPath = path.join(process.cwd(), 'uploads', 'videos', 'homepage-video.mp4');
-    const videoExists = fs.existsSync(videoPath);
-    
     // Get VideoStatus record
     let videoStatus = await VideoStatus.getHomepageVideoStatus();
+    
+    // Check if Cloudinary URL exists (preferred)
+    if (videoStatus.cloudinaryUrl && !videoStatus.deleted) {
+      return res.json({ 
+        success: true, 
+        exists: true,
+        videoUrl: videoStatus.cloudinaryUrl
+      });
+    }
+    
+    // Fallback to local file check (for backward compatibility)
+    const videoPath = path.join(process.cwd(), 'uploads', 'videos', 'homepage-video.mp4');
+    const videoExists = fs.existsSync(videoPath);
     
     // Sync status with actual file
     if (videoExists && videoStatus.deleted) {
@@ -348,7 +358,7 @@ router.get('/homepage-video', async (req, res) => {
       await videoStatus.save();
     }
     
-    if (!videoExists && videoStatus.exists && !videoStatus.deleted) {
+    if (!videoExists && videoStatus.exists && !videoStatus.deleted && !videoStatus.cloudinaryUrl) {
       videoStatus.exists = false;
       videoStatus.deleted = true;
       videoStatus.deletionReason = videoStatus.deletionReason || 'Video file was deleted from server (unknown reason)';
@@ -360,17 +370,16 @@ router.get('/homepage-video', async (req, res) => {
       return res.json({ 
         success: true, 
         exists: false,
-        videoPath: null
+        videoUrl: null
       });
     }
 
-    const stats = fs.statSync(videoPath);
     const videoPathUrl = `/uploads/videos/homepage-video.mp4`;
     
     res.json({ 
       success: true, 
       exists: true,
-      videoPath: videoPathUrl
+      videoUrl: videoPathUrl
     });
   } catch (error) {
     console.error('Error checking video existence:', error);

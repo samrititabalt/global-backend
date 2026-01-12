@@ -14,7 +14,15 @@ const videoStatusSchema = new mongoose.Schema({
   },
   filePath: {
     type: String,
-    required: true
+    required: false // Optional for backward compatibility
+  },
+  cloudinaryUrl: {
+    type: String,
+    required: false
+  },
+  cloudinaryPublicId: {
+    type: String,
+    required: false
   },
   exists: {
     type: Boolean,
