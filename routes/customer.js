@@ -257,7 +257,8 @@ router.post('/custom-service-request', protect, authorize('customer'), async (re
       customerEmail: customerEmail || customer.email,
       requestDetails: requestDetails.trim(),
       plan: plan || (customer.currentPlan ? customer.currentPlan.toString() : 'No plan'),
-      tokenBalance: tokenBalance || customer.tokenBalance || 0
+      tokenBalance: tokenBalance || customer.tokenBalance || 0,
+      status: 'New – Custom Request'
     });
 
     res.json({ 

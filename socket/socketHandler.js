@@ -36,6 +36,8 @@ const socketHandler = (io) => {
           
           // Notify that user is online
           if (user.role === 'agent') {
+            // Also join agent-specific room for notifications
+            socket.join(`agent_${userId}`);
             // Emit to all clients that this agent is online
             io.emit('agentOnline', { agentId: userId });
             // Also emit to specific chat sessions where this agent is active

@@ -28,8 +28,13 @@ const customServiceRequestSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['pending', 'reviewed', 'completed', 'rejected'],
-    default: 'pending'
+    enum: ['New – Custom Request', 'Assigned', 'completed', 'rejected'],
+    default: 'New – Custom Request'
+  },
+  assignedAgent: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null
   },
   adminNotes: {
     type: String,

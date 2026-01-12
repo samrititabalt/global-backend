@@ -1940,6 +1940,7 @@ router.get('/custom-service-requests', protect, authorize('admin'), async (req, 
   try {
     const requests = await CustomServiceRequest.find({})
       .populate('customer', 'name email')
+      .populate('assignedAgent', 'name email')
       .populate('reviewedBy', 'name email')
       .sort({ createdAt: -1 });
     
@@ -1950,17 +1951,66 @@ router.get('/custom-service-requests', protect, authorize('admin'), async (req, 
 });
 
 // @route   PUT /api/admin/custom-service-requests/:id
-// @desc    Update custom service request status
+// @desc    Update custom service request status or assign to agent
 // @access  Private (Admin)
 router.put('/custom-service-requests/:id', protect, authorize('admin'), async (req, res) => {
   try {
-    const { status, adminNotes } = req.body;
-    const request = await CustomServiceRequest.findById(req.params.id);
+    const { status, adminNotes, assignedAgent } = req.body;
+    const request = await CustomServiceRequest.findById(req.params.id)
+      .populate('customer', 'name email')
+      .populate('assignedAgent', 'name email');
     
     if (!request) {
       return res.status(404).json({ success: false, message: 'Request not found' });
     }
     
+    // If assigning an agent
+    if (assignedAgent) {
+      const agent = await User.findById(assignedAgent);
+      if (!agent || agent.role !== 'agent') {
+        return res.status(400).json({ success: false, message: 'Invalid agent selected' });
+      }
+      
+      request.assignedAgent = assignedAgent;
+      request.status = 'Assigned';
+      request.reviewedAt = new Date();
+      request.reviewedBy = req.user._id;
+      
+      await request.save();
+      
+      // Populate assigned agent for response
+      await request.populate('assignedAgent', 'name email');
+      
+      // Emit notification to the assigned agent via Socket.IO
+      const io = req.app.get('io');
+      if (io) {
+        // Emit to both user room and agent room for reliability
+        io.to(`user_${assignedAgent}`).emit('customRequestAssigned', {
+          requestId: request._id,
+          customerName: request.customerName,
+          requestDetails: request.requestDetails,
+          assignedBy: req.user.name,
+          timestamp: new Date()
+        });
+        // Also emit to agent-specific room
+        io.to(`agent_${assignedAgent}`).emit('customRequestAssigned', {
+          requestId: request._id,
+          customerName: request.customerName,
+          requestDetails: request.requestDetails,
+          assignedBy: req.user.name,
+          timestamp: new Date()
+        });
+      }
+      
+      res.json({ 
+        success: true, 
+        message: 'Request assigned to agent successfully',
+        request 
+      });
+      return;
+    }
+    
+    // Otherwise, update status and notes
     request.status = status || request.status;
     request.adminNotes = adminNotes || request.adminNotes;
     request.reviewedAt = new Date();
@@ -1970,6 +2020,7 @@ router.put('/custom-service-requests/:id', protect, authorize('admin'), async (r
     
     res.json({ success: true, request });
   } catch (error) {
+    console.error('Error updating custom service request:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 });
