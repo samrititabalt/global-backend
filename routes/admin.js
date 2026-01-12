@@ -1285,6 +1285,14 @@ router.post('/homepage-video', protect, authorize('admin'), (req, res, next) => 
         console.warn('Error deleting local video file:', unlinkError.message);
       }
       
+      // Check if it's a file size issue
+      if (cloudinaryError.message && (cloudinaryError.message.includes('too large') || cloudinaryError.message.includes('413'))) {
+        return res.status(413).json({ 
+          message: cloudinaryError.message || 'Video file is too large. Maximum size is 100MB for free Cloudinary accounts.',
+          error: 'FILE_TOO_LARGE'
+        });
+      }
+      
       // Check if it's a credentials issue
       if (cloudinaryError.message && cloudinaryError.message.includes('Invalid API')) {
         return res.status(500).json({ 
@@ -1294,8 +1302,8 @@ router.post('/homepage-video', protect, authorize('admin'), (req, res, next) => 
       }
       
       return res.status(500).json({ 
-        message: `Failed to upload video to Cloudinary: ${cloudinaryError.message || 'Unknown error'}`,
-        error: cloudinaryError.message || 'CLOUDINARY_UPLOAD_ERROR'
+        message: cloudinaryError.message || 'Failed to upload video to Cloudinary. Please try again.',
+        error: 'CLOUDINARY_UPLOAD_ERROR'
       });
     }
     

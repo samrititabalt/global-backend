@@ -173,14 +173,23 @@ const uploadVideo = async (file, folder = 'homepage-media/videos', mimeType = 'v
       throw new Error('Cloudinary credentials not configured. Please set CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, and CLOUDINARY_API_SECRET in your .env file.');
     }
 
+    const fileSizeMB = (file.length / 1024 / 1024).toFixed(2);
     console.log('[Cloudinary] Uploading video to folder:', folder);
-    console.log('[Cloudinary] File size:', file.length, 'bytes');
+    console.log('[Cloudinary] File size:', fileSizeMB, 'MB');
+    
+    // Cloudinary free tier limit is 100MB, paid tiers can handle larger
+    // For files over 100MB, we need to use chunked upload or warn the user
+    if (file.length > 100 * 1024 * 1024) {
+      console.warn('[Cloudinary] File size exceeds 100MB. Cloudinary free tier limit is 100MB. Paid plans support up to 2GB.');
+    }
     
     const result = await uploadToCloudinary(file, {
       folder,
       resource_type: 'video',
       mimeType,
       chunk_size: 6000000, // 6MB chunks for large videos
+      // For large files, use eager transformation to process in background
+      eager_async: true,
     });
 
     console.log('[Cloudinary] Video uploaded successfully:', result.secure_url);
@@ -197,7 +206,13 @@ const uploadVideo = async (file, folder = 'homepage-media/videos', mimeType = 'v
   } catch (error) {
     console.error('[Cloudinary] Video upload error:', error);
     
-    // Provide more helpful error messages
+    // Handle specific Cloudinary errors
+    if (error.http_code === 413 || error.message?.includes('413') || error.message?.includes('too large')) {
+      throw new Error('File too large for Cloudinary. Maximum size is 100MB for free accounts, 2GB for paid accounts. Please compress your video or upgrade your Cloudinary plan.');
+    }
+    if (error.http_code === 400 && error.message?.includes('Invalid')) {
+      throw new Error('Invalid video file format. Please ensure the file is a valid MP4, MOV, or WEBM video.');
+    }
     if (error.message && error.message.includes('Invalid API')) {
       throw new Error('Invalid Cloudinary API credentials. Please check your CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET.');
     }
@@ -205,7 +220,9 @@ const uploadVideo = async (file, folder = 'homepage-media/videos', mimeType = 'v
       throw error; // Re-throw configuration errors as-is
     }
     
-    throw new Error(`Cloudinary upload failed: ${error.message || 'Unknown error'}`);
+    // Extract error message from Cloudinary response
+    const errorMsg = error.message || error.error?.message || 'Unknown error';
+    throw new Error(`Cloudinary upload failed: ${errorMsg}`);
   }
 };
 
