@@ -333,8 +333,15 @@ router.get('/homepage-video', async (req, res) => {
     // Get VideoStatus record
     let videoStatus = await VideoStatus.getHomepageVideoStatus();
     
+    console.log('[Public API] VideoStatus:', {
+      cloudinaryUrl: videoStatus.cloudinaryUrl,
+      deleted: videoStatus.deleted,
+      exists: videoStatus.exists
+    });
+    
     // Check if Cloudinary URL exists (preferred)
     if (videoStatus.cloudinaryUrl && !videoStatus.deleted) {
+      console.log('[Public API] Returning Cloudinary URL:', videoStatus.cloudinaryUrl);
       return res.json({ 
         success: true, 
         exists: true,
@@ -345,6 +352,8 @@ router.get('/homepage-video', async (req, res) => {
     // Fallback to local file check (for backward compatibility)
     const videoPath = path.join(process.cwd(), 'uploads', 'videos', 'homepage-video.mp4');
     const videoExists = fs.existsSync(videoPath);
+    
+    console.log('[Public API] Local file check:', { videoExists, path: videoPath });
     
     // Sync status with actual file
     if (videoExists && videoStatus.deleted) {
@@ -367,6 +376,7 @@ router.get('/homepage-video', async (req, res) => {
     }
     
     if (!videoExists) {
+      console.log('[Public API] No video found');
       return res.json({ 
         success: true, 
         exists: false,
@@ -375,6 +385,7 @@ router.get('/homepage-video', async (req, res) => {
     }
 
     const videoPathUrl = `/uploads/videos/homepage-video.mp4`;
+    console.log('[Public API] Returning local file URL:', videoPathUrl);
     
     res.json({ 
       success: true, 
@@ -382,7 +393,7 @@ router.get('/homepage-video', async (req, res) => {
       videoUrl: videoPathUrl
     });
   } catch (error) {
-    console.error('Error checking video existence:', error);
+    console.error('[Public API] Error checking video existence:', error);
     // Return exists: false on error to prevent blocking the page
     res.json({ 
       success: true, 
