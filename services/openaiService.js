@@ -107,9 +107,18 @@ const generateAIResponse = async (userMessage, chatHistory, serviceName) => {
     return getFallbackResponse(userMessage, serviceName);
   }
 
+  // Check if API key is set but might be invalid
+  if (!process.env.OPENAI_API_KEY || process.env.OPENAI_API_KEY.trim() === '') {
+    console.warn('SamAI warning: OPENAI_API_KEY is empty or not set. Falling back to scripted response.');
+    return getFallbackResponse(userMessage, serviceName);
+  }
+
   try {
     const systemPrompt = getServicePrompt(serviceName);
     const messages = buildChatMessages(systemPrompt, chatHistory, userMessage);
+    
+    console.log('Calling OpenAI API with model:', process.env.OPENAI_MODEL || 'gpt-4o-mini');
+    
     const completion = await client.chat.completions.create({
       model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
       messages,
@@ -128,8 +137,22 @@ const generateAIResponse = async (userMessage, chatHistory, serviceName) => {
     console.warn('SamAI warning: OpenAI returned an empty completion. Using fallback response.');
     return getFallbackResponse(userMessage, serviceName);
   } catch (error) {
-    const errorMessage = error?.response?.data || error?.message || error;
-    console.error('OpenAI API error:', errorMessage);
+    // Log detailed error information
+    const errorDetails = {
+      message: error?.message,
+      status: error?.status,
+      code: error?.code,
+      response: error?.response?.data,
+      type: error?.type
+    };
+    console.error('OpenAI API error details:', JSON.stringify(errorDetails, null, 2));
+    
+    // Check for specific API key errors
+    if (error?.status === 401 || error?.code === 'invalid_api_key' || error?.message?.includes('api key')) {
+      console.error('OpenAI API key appears to be invalid. Please check your OPENAI_API_KEY environment variable.');
+    }
+    
+    // Always return fallback response on error
     return getFallbackResponse(userMessage, serviceName);
   }
 };

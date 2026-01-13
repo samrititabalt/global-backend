@@ -49,21 +49,34 @@ router.post('/chatbot-message', async (req, res) => {
       }))
       .slice(-10); // Keep last 10 messages for context
 
-    // Use GPT-4 Mini for responses
-    const aiResponse = await generateAIResponse(
-      message.trim(),
-      formattedHistory,
-      'default' // Using default service prompt
-    );
+    // Use GPT-4 Mini for responses - this will return a fallback if API key is missing/invalid
+    let aiResponse;
+    try {
+      aiResponse = await generateAIResponse(
+        message.trim(),
+        formattedHistory,
+        'default' // Using default service prompt
+      );
+    } catch (aiError) {
+      console.error('Error generating AI response:', aiError);
+      console.error('Error details:', {
+        message: aiError.message,
+        stack: aiError.stack,
+        response: aiError.response?.data
+      });
+      // Use a helpful fallback message if AI generation fails
+      const messagePreview = message.substring(0, 50);
+      aiResponse = `Thanks for your message about "${messagePreview}${message.length > 50 ? '...' : ''}". I'm here to help you with Sam's Smart Reports Pro. How can I assist you with building charts, formatting data, or customizing your dashboard?`;
+    }
 
-    // Track chatbot interaction activity
+    // Track chatbot interaction activity (non-blocking)
     Activity.create({
       type: 'chatbot_interaction',
       description: `Chatbot interaction: Visitor sent message "${message.substring(0, 100)}${message.length > 100 ? '...' : ''}"`,
       metadata: { message: message.trim(), chatHistoryLength: chatHistory.length }
     }).catch(err => console.error('Error creating activity:', err));
 
-    // Send email notification to owner
+    // Send email notification to owner (non-blocking)
     const emailSubject = 'New Chatbot Interaction - Tabalt Website';
     const emailContent = `
       <!DOCTYPE html>
@@ -102,7 +115,6 @@ router.post('/chatbot-message', async (req, res) => {
       </html>
     `;
     
-    // Send email notification (non-blocking)
     mail('spbajaj25@gmail.com', emailSubject, emailContent)
       .then(() => console.log('Chatbot interaction email sent'))
       .catch(err => console.error('Error sending chatbot interaction email:', err));
@@ -113,10 +125,12 @@ router.post('/chatbot-message', async (req, res) => {
     });
   } catch (error) {
     console.error('Public chatbot error:', error);
+    console.error('Error stack:', error.stack);
+    // Return a helpful fallback message even on error
     res.status(500).json({
       success: false,
-      message: 'Unable to process message at this time.',
-      error: error.message,
+      message: 'I apologize, but I\'m having trouble processing your request right now. Please try again in a moment, or feel free to ask a simpler question.',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
     });
   }
 });
