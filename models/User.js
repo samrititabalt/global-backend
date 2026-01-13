@@ -139,7 +139,7 @@ const userSchema = new mongoose.Schema({
   // Resume Builder usage tracking
   resumeBuilderUsageRemaining: {
     type: Number,
-    default: 10
+    default: 100
   },
   createdAt: {
     type: Date,

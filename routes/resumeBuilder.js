@@ -50,7 +50,7 @@ router.get('/usage', protect, authorize('customer'), async (req, res) => {
     const user = await User.findById(req.user._id);
     res.json({
       success: true,
-      usageRemaining: user.resumeBuilderUsageRemaining || 10
+      usageRemaining: user.resumeBuilderUsageRemaining || 100
     });
   } catch (error) {
     console.error('Error fetching usage:', error);
