@@ -9,6 +9,8 @@ const { generateAIResponse } = require('../services/openaiService');
 const Lead = require('../models/Lead');
 const Activity = require('../models/Activity');
 const VideoStatus = require('../models/VideoStatus');
+const SharedChart = require('../models/SharedChart');
+const { protect } = require('../middleware/auth');
 
 // @route   GET /api/public/plans
 // @desc    Get all available plans (public)
@@ -460,6 +462,91 @@ router.get('/homepage-video', async (req, res) => {
       success: true, 
       exists: false,
       videoPath: null
+    });
+  }
+});
+
+// @route   POST /api/public/share-chart
+// @desc    Save chart data and generate shareable link
+// @access  Public (but protected route - user must be logged in to share)
+router.post('/share-chart', protect, async (req, res) => {
+  try {
+    const { chartData, chartConfigs, gridData, fieldRoles, fieldModes, dateHierarchies, availableColumns } = req.body;
+
+    if (!chartData || !chartConfigs || !gridData) {
+      return res.status(400).json({
+        success: false,
+        message: 'Chart data, configurations, and grid data are required',
+      });
+    }
+
+    // Generate unique share ID
+    const shareId = require('crypto').randomBytes(16).toString('hex');
+
+    // Save shared chart
+    const sharedChart = await SharedChart.create({
+      shareId,
+      chartData,
+      chartConfigs,
+      gridData,
+      fieldRoles: fieldRoles || {},
+      fieldModes: fieldModes || {},
+      dateHierarchies: dateHierarchies || {},
+      availableColumns: availableColumns || [],
+      sharedBy: req.user._id,
+    });
+
+    res.json({
+      success: true,
+      shareId,
+      shareUrl: `${req.protocol}://${req.get('host')}/share/chart/${shareId}`,
+    });
+  } catch (error) {
+    console.error('Error sharing chart:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to share chart',
+      error: error.message,
+    });
+  }
+});
+
+// @route   GET /api/public/shared-chart/:shareId
+// @desc    Get shared chart data by share ID
+// @access  Public (no authentication required)
+router.get('/shared-chart/:shareId', async (req, res) => {
+  try {
+    const { shareId } = req.params;
+
+    const sharedChart = await SharedChart.findOne({ 
+      shareId,
+      expiresAt: { $gt: new Date() } // Only return if not expired
+    });
+
+    if (!sharedChart) {
+      return res.status(404).json({
+        success: false,
+        message: 'Shared chart not found or expired',
+      });
+    }
+
+    res.json({
+      success: true,
+      chartData: sharedChart.chartData,
+      chartConfigs: sharedChart.chartConfigs,
+      gridData: sharedChart.gridData,
+      fieldRoles: sharedChart.fieldRoles || {},
+      fieldModes: sharedChart.fieldModes || {},
+      dateHierarchies: sharedChart.dateHierarchies || {},
+      availableColumns: sharedChart.availableColumns || [],
+      sharedAt: sharedChart.sharedAt,
+    });
+  } catch (error) {
+    console.error('Error retrieving shared chart:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to retrieve shared chart',
+      error: error.message,
     });
   }
 });
