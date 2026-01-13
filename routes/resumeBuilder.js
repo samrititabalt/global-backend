@@ -48,9 +48,23 @@ const upload = multer({
 router.get('/usage', protect, authorize('customer'), async (req, res) => {
   try {
     const user = await User.findById(req.user._id);
+    
+    // Count actual usage from ResumeBuilderUsage records
+    const actualUsageCount = await ResumeBuilderUsage.countDocuments({ customer: user._id });
+    
+    // Calculate correct remaining: 100 - actualUsageCount
+    const correctRemaining = 100 - actualUsageCount;
+    
+    // If the stored value doesn't match the calculated value, update it
+    // This ensures existing customers get the updated limit automatically
+    if (user.resumeBuilderUsageRemaining !== correctRemaining) {
+      user.resumeBuilderUsageRemaining = correctRemaining;
+      await user.save();
+    }
+    
     res.json({
       success: true,
-      usageRemaining: user.resumeBuilderUsageRemaining || 100
+      usageRemaining: user.resumeBuilderUsageRemaining
     });
   } catch (error) {
     console.error('Error fetching usage:', error);
