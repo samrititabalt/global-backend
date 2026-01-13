@@ -775,6 +775,24 @@ router.post('/transactions/:id/reject', protect, authorize('admin'), async (req,
   }
 });
 
+// @route   DELETE /api/admin/transactions/:id
+// @desc    Delete a transaction
+// @access  Private (Admin)
+router.delete('/transactions/:id', protect, authorize('admin'), async (req, res) => {
+  try {
+    const transaction = await Transaction.findByIdAndDelete(req.params.id);
+    
+    if (!transaction) {
+      return res.status(404).json({ success: false, message: 'Transaction not found' });
+    }
+    
+    res.json({ success: true, message: 'Transaction deleted successfully' });
+  } catch (error) {
+    console.error('Error deleting transaction:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
 // ========== CUSTOMER MANAGEMENT ==========
 
 // @route   GET /api/admin/customers
@@ -788,6 +806,90 @@ router.get('/customers', protect, authorize('admin'), async (req, res) => {
 
     res.json({ success: true, customers });
   } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   POST /api/admin/customers
+// @desc    Create a new customer
+// @access  Private (Admin)
+router.post('/customers', protect, authorize('admin'), upload.fields([{ name: 'avatar', maxCount: 1 }]), uploadToCloudinary, [
+  body('name').trim().notEmpty().withMessage('Name is required'),
+  body('email').normalizeEmail().isEmail().withMessage('Please provide a valid email'),
+  body('phone').trim().notEmpty().withMessage('Phone number is required'),
+  body('country').trim().notEmpty().withMessage('Country is required'),
+  body('password').isLength({ min: 6 }).withMessage('Password must be at least 6 characters'),
+  body('planId').optional().isMongoId().withMessage('Invalid plan ID')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    const { name, email, phone, country, password, planId } = req.body;
+
+    // Check if email already exists
+    const existingUser = await User.findOne({ email: email.toLowerCase().trim() });
+    if (existingUser) {
+      return res.status(400).json({ message: 'Email already exists' });
+    }
+
+    // Get avatar URL if uploaded
+    let avatarUrl = null;
+    if (req.uploadedFiles && req.uploadedFiles.length > 0) {
+      const avatarFile = req.uploadedFiles.find(f => f.type === 'avatar');
+      if (avatarFile) {
+        avatarUrl = avatarFile.url;
+      }
+    }
+
+    // Hash password
+    const bcrypt = require('bcryptjs');
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    // Create customer
+    const customerData = {
+      name: name.trim(),
+      email: email.toLowerCase().trim(),
+      phone: phone.trim(),
+      country: country.trim(),
+      password: hashedPassword,
+      role: 'customer',
+      avatar: avatarUrl
+    };
+
+    // If plan is selected, assign it
+    if (planId) {
+      const plan = await Plan.findById(planId);
+      if (!plan) {
+        return res.status(404).json({ message: 'Plan not found' });
+      }
+      
+      customerData.currentPlan = planId;
+      customerData.planStatus = 'approved';
+      customerData.tokenBalance = plan.tokens || 0;
+    }
+
+    const customer = await User.create(customerData);
+
+    // Track activity
+    Activity.create({
+      type: 'customer_registered',
+      description: `Admin created customer: ${name} (${email})`,
+      user: customer._id,
+      metadata: { name, email, phone, country, createdBy: req.user._id }
+    }).catch(err => console.error('Error creating activity:', err));
+
+    const populatedCustomer = await User.findById(customer._id)
+      .populate('currentPlan', 'name price tokens');
+
+    res.status(201).json({ success: true, customer: populatedCustomer });
+  } catch (error) {
+    console.error('Error creating customer:', error);
+    if (error.code === 11000) {
+      return res.status(400).json({ message: 'Email already exists' });
+    }
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 });
@@ -2021,6 +2123,24 @@ router.put('/custom-service-requests/:id', protect, authorize('admin'), async (r
     res.json({ success: true, request });
   } catch (error) {
     console.error('Error updating custom service request:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   DELETE /api/admin/custom-service-requests/:id
+// @desc    Delete a custom service request
+// @access  Private (Admin)
+router.delete('/custom-service-requests/:id', protect, authorize('admin'), async (req, res) => {
+  try {
+    const request = await CustomServiceRequest.findByIdAndDelete(req.params.id);
+    
+    if (!request) {
+      return res.status(404).json({ success: false, message: 'Request not found' });
+    }
+    
+    res.json({ success: true, message: 'Custom service request deleted successfully' });
+  } catch (error) {
+    console.error('Error deleting custom service request:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 });
