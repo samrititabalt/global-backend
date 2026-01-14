@@ -5,10 +5,10 @@ const multer = require('multer');
 const mammoth = require('mammoth');
 const pdfParse = require('pdf-parse');
 const { PDFDocument: PDFLib, rgb } = require('pdf-lib');
+const PDFDocument = require('pdfkit');
 const fs = require('fs');
 const path = require('path');
 const Docx = require('docx');
-const puppeteer = require('puppeteer');
 
 // Configure multer for memory storage
 const storage = multer.memoryStorage();
@@ -20,38 +20,61 @@ const upload = multer({
 });
 
 /**
- * REQUIRED NPM PACKAGES:
- * npm install mammoth pdf-parse pdf-lib docx puppeteer
+ * REQUIRED NPM PACKAGES (lightweight - no Puppeteer):
+ * npm install mammoth pdfkit pdf-parse pdf-lib docx
  * 
- * Note: Puppeteer requires Chrome/Chromium. It will download automatically on first install.
- * For production, you may need to set PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=false
+ * This version uses lighter libraries that install quickly on Render.
  */
 
-// Helper function to get or create browser instance
-let browserInstance = null;
-const getBrowser = async () => {
-  if (!browserInstance) {
-    browserInstance = await puppeteer.launch({
-      headless: true,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-gpu',
-        '--disable-software-rasterizer'
-      ],
-      // For Render.com, use system Chrome if available
-      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined
-    });
+// Helper to parse HTML and extract structured content
+const parseHTMLContent = (html) => {
+  // Simple HTML parser to extract text, tables, and basic formatting
+  const content = {
+    paragraphs: [],
+    tables: [],
+    images: []
+  };
+  
+  // Extract paragraphs (simple regex-based parsing)
+  const paragraphRegex = /<p[^>]*>(.*?)<\/p>/gis;
+  const matches = html.matchAll(paragraphRegex);
+  for (const match of matches) {
+    const text = match[1].replace(/<[^>]*>/g, '').trim();
+    if (text) content.paragraphs.push(text);
   }
-  return browserInstance;
+  
+  // Extract table data
+  const tableRegex = /<table[^>]*>(.*?)<\/table>/gis;
+  const tableMatches = html.matchAll(tableRegex);
+  for (const tableMatch of tableMatches) {
+    const tableHtml = tableMatch[1];
+    const rowRegex = /<tr[^>]*>(.*?)<\/tr>/gis;
+    const rows = [];
+    for (const rowMatch of tableHtml.matchAll(rowRegex)) {
+      const cellRegex = /<t[dh][^>]*>(.*?)<\/t[dh]>/gis;
+      const cells = [];
+      for (const cellMatch of rowMatch[1].matchAll(cellRegex)) {
+        cells.push(cellMatch[1].replace(/<[^>]*>/g, '').trim());
+      }
+      if (cells.length > 0) rows.push(cells);
+    }
+    if (rows.length > 0) content.tables.push(rows);
+  }
+  
+  // Extract images (base64)
+  const imgRegex = /<img[^>]*src=["'](data:image\/[^;]+;base64,[^"']+)["']/gi;
+  const imgMatches = html.matchAll(imgRegex);
+  for (const imgMatch of imgMatches) {
+    content.images.push(imgMatch[1]);
+  }
+  
+  return content;
 };
 
 // @route   POST /api/document-converter/word-to-pdf
 // @desc    Convert Word document (.doc or .docx) to PDF with formatting preservation
 // @access  Private (Customer)
 router.post('/word-to-pdf', protect, authorize('customer'), upload.single('file'), async (req, res) => {
-  let browser = null;
   try {
     if (!req.file) {
       return res.status(400).json({ message: 'No file uploaded' });
@@ -79,83 +102,148 @@ router.post('/word-to-pdf', protect, authorize('customer'), upload.single('file'
         const html = htmlResult.value;
         const messages = htmlResult.messages;
         
-        // Check for conversion warnings
-        if (messages.some(m => m.type === 'warning')) {
-          console.warn('Word conversion warnings:', messages.filter(m => m.type === 'warning'));
-        }
-
-        // Create a complete HTML document with proper styling
-        const fullHtml = `
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8">
-  <style>
-    body {
-      font-family: 'Times New Roman', serif;
-      font-size: 12pt;
-      line-height: 1.5;
-      margin: 1in;
-      color: #000;
-    }
-    table {
-      border-collapse: collapse;
-      width: 100%;
-      margin: 10px 0;
-    }
-    table td, table th {
-      border: 1px solid #ddd;
-      padding: 8px;
-      text-align: left;
-    }
-    table th {
-      background-color: #f2f2f2;
-      font-weight: bold;
-    }
-    img {
-      max-width: 100%;
-      height: auto;
-      display: block;
-      margin: 10px 0;
-    }
-    p {
-      margin: 6px 0;
-    }
-    h1, h2, h3, h4, h5, h6 {
-      margin: 12px 0 6px 0;
-      font-weight: bold;
-    }
-    @media print {
-      body { margin: 0.5in; }
-    }
-  </style>
-</head>
-<body>
-  ${html}
-</body>
-</html>`;
-
-        // Use Puppeteer to convert HTML to PDF (preserves all formatting, tables, images)
-        browser = await getBrowser();
-        const page = await browser.newPage();
+        // Also get raw text as fallback
+        const textResult = await mammoth.extractRawText({ buffer: file.buffer });
         
-        // Set content and wait for resources to load
-        await page.setContent(fullHtml, { waitUntil: 'networkidle0' });
+        // Parse HTML content
+        const parsedContent = parseHTMLContent(html);
         
-        // Generate PDF with proper settings
-        const pdfBuffer = await page.pdf({
-          format: 'A4',
-          margin: {
-            top: '0.5in',
-            right: '0.5in',
-            bottom: '0.5in',
-            left: '0.5in'
-          },
-          printBackground: true,
-          preferCSSPageSize: false
+        // Create PDF using PDFKit with better formatting
+        const doc = new PDFDocument({
+          size: 'A4',
+          margins: { top: 50, bottom: 50, left: 50, right: 50 }
         });
         
-        await page.close();
+        const chunks = [];
+        doc.on('data', chunk => chunks.push(chunk));
+        
+        // Add content to PDF
+        let yPosition = 50;
+        const pageHeight = 792; // A4 height in points
+        const lineHeight = 14;
+        const margin = 50;
+        
+        // Add paragraphs
+        parsedContent.paragraphs.forEach((para, index) => {
+          if (yPosition > pageHeight - 100) {
+            doc.addPage();
+            yPosition = margin;
+          }
+          
+          // Check if paragraph is a heading (short, bold-like)
+          const isHeading = para.length < 100 && (index === 0 || parsedContent.paragraphs[index - 1] === '');
+          
+          if (isHeading) {
+            doc.fontSize(16).font('Helvetica-Bold').text(para, margin, yPosition, {
+              width: 495,
+              align: 'left'
+            });
+            yPosition += 20;
+          } else {
+            doc.fontSize(12).font('Helvetica').text(para, margin, yPosition, {
+              width: 495,
+              align: 'left'
+            });
+            yPosition += doc.heightOfString(para, { width: 495 }) + 10;
+          }
+        });
+        
+        // Add tables
+        parsedContent.tables.forEach((table, tableIndex) => {
+          if (yPosition > pageHeight - 150) {
+            doc.addPage();
+            yPosition = margin;
+          }
+          
+          const startY = yPosition;
+          const colWidth = 495 / (table[0]?.length || 1);
+          let maxRowHeight = 20;
+          
+          table.forEach((row, rowIndex) => {
+            let xPosition = margin;
+            let rowHeight = 20;
+            
+            row.forEach((cell, cellIndex) => {
+              const isHeader = rowIndex === 0;
+              doc.fontSize(isHeader ? 11 : 10)
+                 .font(isHeader ? 'Helvetica-Bold' : 'Helvetica')
+                 .rect(xPosition, yPosition, colWidth, rowHeight)
+                 .stroke()
+                 .text(cell || '', xPosition + 5, yPosition + 5, {
+                   width: colWidth - 10,
+                   height: rowHeight - 10,
+                   align: 'left'
+                 });
+              
+              const cellHeight = doc.heightOfString(cell || '', { width: colWidth - 10 });
+              if (cellHeight > rowHeight) rowHeight = cellHeight + 10;
+              
+              xPosition += colWidth;
+            });
+            
+            yPosition += rowHeight;
+            
+            if (yPosition > pageHeight - 50) {
+              doc.addPage();
+              yPosition = margin;
+            }
+          });
+          
+          yPosition += 20; // Space after table
+        });
+        
+        // Add images (base64)
+        parsedContent.images.forEach((imgData, imgIndex) => {
+          if (yPosition > pageHeight - 200) {
+            doc.addPage();
+            yPosition = margin;
+          }
+          
+          try {
+            // Extract base64 data
+            const base64Data = imgData.split(',')[1];
+            const imageBuffer = Buffer.from(base64Data, 'base64');
+            
+            // Get image dimensions (simplified - assumes reasonable size)
+            doc.image(imageBuffer, margin, yPosition, {
+              fit: [495, 300],
+              align: 'center'
+            });
+            
+            yPosition += 320;
+          } catch (imgError) {
+            console.warn('Error adding image:', imgError);
+            // Skip image if there's an error
+          }
+        });
+        
+        // If no structured content, use raw text
+        if (parsedContent.paragraphs.length === 0 && parsedContent.tables.length === 0) {
+          const text = textResult.value || '';
+          const lines = text.split('\n').filter(line => line.trim());
+          
+          lines.forEach((line) => {
+            if (yPosition > pageHeight - 50) {
+              doc.addPage();
+              yPosition = margin;
+            }
+            
+            doc.fontSize(12).font('Helvetica').text(line.trim(), margin, yPosition, {
+              width: 495,
+              align: 'left'
+            });
+            yPosition += doc.heightOfString(line.trim(), { width: 495 }) + 8;
+          });
+        }
+        
+        doc.end();
+        
+        // Wait for PDF to be generated
+        await new Promise((resolve) => {
+          doc.on('end', resolve);
+        });
+        
+        const pdfBuffer = Buffer.concat(chunks);
         
         // Send PDF as response
         res.setHeader('Content-Type', 'application/pdf');
@@ -479,21 +567,6 @@ router.post('/edit-pdf', protect, authorize('customer'), upload.single('file'), 
   } catch (error) {
     console.error('Edit PDF route error:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
-  }
-});
-
-// Cleanup browser on process exit
-process.on('SIGTERM', async () => {
-  if (browserInstance) {
-    await browserInstance.close();
-    browserInstance = null;
-  }
-});
-
-process.on('SIGINT', async () => {
-  if (browserInstance) {
-    await browserInstance.close();
-    browserInstance = null;
   }
 });
 
