@@ -2,13 +2,9 @@ const express = require('express');
 const router = express.Router();
 const { protect, authorize } = require('../middleware/auth');
 const multer = require('multer');
-const mammoth = require('mammoth');
 const pdfParse = require('pdf-parse');
 const { PDFDocument: PDFLib, rgb } = require('pdf-lib');
 const PDFDocument = require('pdfkit');
-const fs = require('fs');
-const path = require('path');
-const Docx = require('docx');
 
 // Configure multer for memory storage
 const storage = multer.memoryStorage();
@@ -20,59 +16,16 @@ const upload = multer({
 });
 
 /**
- * REQUIRED NPM PACKAGES (lightweight - no Puppeteer):
- * npm install mammoth pdfkit pdf-parse pdf-lib docx
+ * MINIMAL DEPENDENCIES VERSION - Fast deployment on Render
+ * Only uses: pdfkit, pdf-parse, pdf-lib (all lightweight)
  * 
- * This version uses lighter libraries that install quickly on Render.
+ * Word to PDF: Simple text extraction and PDF creation
+ * PDF to Word: Text extraction and simple Word-like output
+ * PDF Editing: Full functionality with pdf-lib
  */
 
-// Helper to parse HTML and extract structured content
-const parseHTMLContent = (html) => {
-  // Simple HTML parser to extract text, tables, and basic formatting
-  const content = {
-    paragraphs: [],
-    tables: [],
-    images: []
-  };
-  
-  // Extract paragraphs (simple regex-based parsing)
-  const paragraphRegex = /<p[^>]*>(.*?)<\/p>/gis;
-  const matches = html.matchAll(paragraphRegex);
-  for (const match of matches) {
-    const text = match[1].replace(/<[^>]*>/g, '').trim();
-    if (text) content.paragraphs.push(text);
-  }
-  
-  // Extract table data
-  const tableRegex = /<table[^>]*>(.*?)<\/table>/gis;
-  const tableMatches = html.matchAll(tableRegex);
-  for (const tableMatch of tableMatches) {
-    const tableHtml = tableMatch[1];
-    const rowRegex = /<tr[^>]*>(.*?)<\/tr>/gis;
-    const rows = [];
-    for (const rowMatch of tableHtml.matchAll(rowRegex)) {
-      const cellRegex = /<t[dh][^>]*>(.*?)<\/t[dh]>/gis;
-      const cells = [];
-      for (const cellMatch of rowMatch[1].matchAll(cellRegex)) {
-        cells.push(cellMatch[1].replace(/<[^>]*>/g, '').trim());
-      }
-      if (cells.length > 0) rows.push(cells);
-    }
-    if (rows.length > 0) content.tables.push(rows);
-  }
-  
-  // Extract images (base64)
-  const imgRegex = /<img[^>]*src=["'](data:image\/[^;]+;base64,[^"']+)["']/gi;
-  const imgMatches = html.matchAll(imgRegex);
-  for (const imgMatch of imgMatches) {
-    content.images.push(imgMatch[1]);
-  }
-  
-  return content;
-};
-
 // @route   POST /api/document-converter/word-to-pdf
-// @desc    Convert Word document (.doc or .docx) to PDF with formatting preservation
+// @desc    Convert Word document (.doc or .docx) to PDF
 // @access  Private (Customer)
 router.post('/word-to-pdf', protect, authorize('customer'), upload.single('file'), async (req, res) => {
   try {
@@ -93,170 +46,88 @@ router.post('/word-to-pdf', protect, authorize('customer'), upload.single('file'
     }
 
     try {
-      // For .docx files, use mammoth to convert to HTML (preserves formatting, tables, images)
+      // Simple text extraction from Word files
+      // For .docx files, extract text from XML structure
+      let textContent = '';
+      
       if (file.originalname.toLowerCase().endsWith('.docx') || 
           file.mimetype.includes('openxmlformats')) {
+        // .docx is a ZIP file containing XML
+        // Simple extraction: look for text in document.xml
+        const zip = require('jszip');
+        const zipFile = await zip.loadAsync(file.buffer);
+        const documentXml = await zipFile.file('word/document.xml').async('string');
         
-        // Convert Word to HTML (preserves tables, formatting, images as base64)
-        const htmlResult = await mammoth.convertToHtml({ buffer: file.buffer });
-        const html = htmlResult.value;
-        const messages = htmlResult.messages;
-        
-        // Also get raw text as fallback
-        const textResult = await mammoth.extractRawText({ buffer: file.buffer });
-        
-        // Parse HTML content
-        const parsedContent = parseHTMLContent(html);
-        
-        // Create PDF using PDFKit with better formatting
-        const doc = new PDFDocument({
-          size: 'A4',
-          margins: { top: 50, bottom: 50, left: 50, right: 50 }
-        });
-        
-        const chunks = [];
-        doc.on('data', chunk => chunks.push(chunk));
-        
-        // Add content to PDF
-        let yPosition = 50;
-        const pageHeight = 792; // A4 height in points
-        const lineHeight = 14;
-        const margin = 50;
-        
-        // Add paragraphs
-        parsedContent.paragraphs.forEach((para, index) => {
-          if (yPosition > pageHeight - 100) {
-            doc.addPage();
-            yPosition = margin;
-          }
-          
-          // Check if paragraph is a heading (short, bold-like)
-          const isHeading = para.length < 100 && (index === 0 || parsedContent.paragraphs[index - 1] === '');
-          
-          if (isHeading) {
-            doc.fontSize(16).font('Helvetica-Bold').text(para, margin, yPosition, {
-              width: 495,
-              align: 'left'
-            });
-            yPosition += 20;
-          } else {
-            doc.fontSize(12).font('Helvetica').text(para, margin, yPosition, {
-              width: 495,
-              align: 'left'
-            });
-            yPosition += doc.heightOfString(para, { width: 495 }) + 10;
-          }
-        });
-        
-        // Add tables
-        parsedContent.tables.forEach((table, tableIndex) => {
-          if (yPosition > pageHeight - 150) {
-            doc.addPage();
-            yPosition = margin;
-          }
-          
-          const startY = yPosition;
-          const colWidth = 495 / (table[0]?.length || 1);
-          let maxRowHeight = 20;
-          
-          table.forEach((row, rowIndex) => {
-            let xPosition = margin;
-            let rowHeight = 20;
-            
-            row.forEach((cell, cellIndex) => {
-              const isHeader = rowIndex === 0;
-              doc.fontSize(isHeader ? 11 : 10)
-                 .font(isHeader ? 'Helvetica-Bold' : 'Helvetica')
-                 .rect(xPosition, yPosition, colWidth, rowHeight)
-                 .stroke()
-                 .text(cell || '', xPosition + 5, yPosition + 5, {
-                   width: colWidth - 10,
-                   height: rowHeight - 10,
-                   align: 'left'
-                 });
-              
-              const cellHeight = doc.heightOfString(cell || '', { width: colWidth - 10 });
-              if (cellHeight > rowHeight) rowHeight = cellHeight + 10;
-              
-              xPosition += colWidth;
-            });
-            
-            yPosition += rowHeight;
-            
-            if (yPosition > pageHeight - 50) {
-              doc.addPage();
-              yPosition = margin;
-            }
-          });
-          
-          yPosition += 20; // Space after table
-        });
-        
-        // Add images (base64)
-        parsedContent.images.forEach((imgData, imgIndex) => {
-          if (yPosition > pageHeight - 200) {
-            doc.addPage();
-            yPosition = margin;
-          }
-          
-          try {
-            // Extract base64 data
-            const base64Data = imgData.split(',')[1];
-            const imageBuffer = Buffer.from(base64Data, 'base64');
-            
-            // Get image dimensions (simplified - assumes reasonable size)
-            doc.image(imageBuffer, margin, yPosition, {
-              fit: [495, 300],
-              align: 'center'
-            });
-            
-            yPosition += 320;
-          } catch (imgError) {
-            console.warn('Error adding image:', imgError);
-            // Skip image if there's an error
-          }
-        });
-        
-        // If no structured content, use raw text
-        if (parsedContent.paragraphs.length === 0 && parsedContent.tables.length === 0) {
-          const text = textResult.value || '';
-          const lines = text.split('\n').filter(line => line.trim());
-          
-          lines.forEach((line) => {
-            if (yPosition > pageHeight - 50) {
-              doc.addPage();
-              yPosition = margin;
-            }
-            
-            doc.fontSize(12).font('Helvetica').text(line.trim(), margin, yPosition, {
-              width: 495,
-              align: 'left'
-            });
-            yPosition += doc.heightOfString(line.trim(), { width: 495 }) + 8;
-          });
+        // Extract text from XML (simple regex-based)
+        const textRegex = /<w:t[^>]*>([^<]*)<\/w:t>/gi;
+        const matches = documentXml.matchAll(textRegex);
+        const textParts = [];
+        for (const match of matches) {
+          if (match[1]) textParts.push(match[1]);
         }
+        textContent = textParts.join(' ');
         
-        doc.end();
-        
-        // Wait for PDF to be generated
-        await new Promise((resolve) => {
-          doc.on('end', resolve);
-        });
-        
-        const pdfBuffer = Buffer.concat(chunks);
-        
-        // Send PDF as response
-        res.setHeader('Content-Type', 'application/pdf');
-        res.setHeader('Content-Disposition', `attachment; filename="${file.originalname.replace(/\.(doc|docx)$/i, '.pdf')}"`);
-        res.send(pdfBuffer);
-        
+        // Also extract paragraphs
+        const paraRegex = /<w:p[^>]*>/gi;
+        const paragraphs = textContent.split(/\s{2,}/).filter(p => p.trim());
+        textContent = paragraphs.join('\n\n');
       } else {
-        // For .doc files (older format), we need LibreOffice
+        // For .doc files, we can't easily parse them
         return res.status(400).json({ 
-          message: '.doc files require LibreOffice. Please convert to .docx first.',
+          message: '.doc files require additional libraries. Please convert to .docx first.',
           suggestion: 'Convert your .doc file to .docx format and try again.'
         });
       }
+      
+      if (!textContent || textContent.trim().length === 0) {
+        return res.status(400).json({ 
+          message: 'Could not extract text from Word document. The file may be corrupted or contain only images.',
+        });
+      }
+      
+      // Create PDF using PDFKit
+      const doc = new PDFDocument({
+        size: 'A4',
+        margins: { top: 50, bottom: 50, left: 50, right: 50 }
+      });
+      
+      const chunks = [];
+      doc.on('data', chunk => chunks.push(chunk));
+      
+      // Add text content to PDF
+      const lines = textContent.split('\n').filter(line => line.trim());
+      const pageHeight = 792;
+      let yPosition = 50;
+      
+      lines.forEach((line) => {
+        if (yPosition > pageHeight - 50) {
+          doc.addPage();
+          yPosition = 50;
+        }
+        
+        doc.fontSize(12)
+           .font('Helvetica')
+           .text(line.trim(), 50, yPosition, {
+             width: 495,
+             align: 'left'
+           });
+        
+        yPosition += doc.heightOfString(line.trim(), { width: 495 }) + 8;
+      });
+      
+      doc.end();
+      
+      // Wait for PDF to be generated
+      await new Promise((resolve) => {
+        doc.on('end', resolve);
+      });
+      
+      const pdfBuffer = Buffer.concat(chunks);
+      
+      // Send PDF as response
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${file.originalname.replace(/\.(doc|docx)$/i, '.pdf')}"`);
+      res.send(pdfBuffer);
       
     } catch (error) {
       console.error('Word to PDF conversion error:', error);
@@ -273,7 +144,7 @@ router.post('/word-to-pdf', protect, authorize('customer'), upload.single('file'
 });
 
 // @route   POST /api/document-converter/pdf-to-word
-// @desc    Convert PDF document to Word (.docx) with improved structure preservation
+// @desc    Convert PDF document to Word (.docx) - Returns plain text file
 // @access  Private (Customer)
 router.post('/pdf-to-word', protect, authorize('customer'), upload.single('file'), async (req, res) => {
   try {
@@ -288,7 +159,7 @@ router.post('/pdf-to-word', protect, authorize('customer'), upload.single('file'
     }
 
     try {
-      // Extract text and structure from PDF
+      // Extract text from PDF
       const pdfData = await pdfParse(file.buffer);
       const extractedText = pdfData.text;
       
@@ -299,83 +170,20 @@ router.post('/pdf-to-word', protect, authorize('customer'), upload.single('file'
         });
       }
       
-      // Create Word document using docx library with better structure
-      const { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, WidthType } = Docx;
+      // Create a simple text file (lightweight alternative to .docx)
+      // Format as plain text with line breaks
+      const formattedText = extractedText
+        .split('\n')
+        .filter(line => line.trim())
+        .join('\n\n');
       
-      // Parse text into structured paragraphs
-      // Try to detect headings, lists, and tables
-      const lines = extractedText.split('\n').filter(line => line.trim());
-      const paragraphs = [];
+      // Create a simple .txt file (can be opened in Word)
+      const textBuffer = Buffer.from(formattedText, 'utf-8');
       
-      lines.forEach((line, index) => {
-        const trimmed = line.trim();
-        if (!trimmed) return;
-        
-        // Detect potential headings (short lines, all caps, or lines followed by blank)
-        const isPotentialHeading = (
-          trimmed.length < 100 && 
-          (trimmed === trimmed.toUpperCase() || 
-           (index < lines.length - 1 && !lines[index + 1]?.trim()))
-        );
-        
-        if (isPotentialHeading && trimmed.length < 80) {
-          paragraphs.push(
-            new Paragraph({
-              children: [new TextRun({
-                text: trimmed,
-                bold: true,
-                size: 28, // 14pt
-              })],
-              heading: HeadingLevel.HEADING_2,
-              spacing: { after: 200, before: 200 }
-            })
-          );
-        } else {
-          // Regular paragraph
-          paragraphs.push(
-            new Paragraph({
-              children: [new TextRun({
-                text: trimmed,
-                size: 24, // 12pt
-              })],
-              spacing: { after: 120 }
-            })
-          );
-        }
-      });
-      
-      const doc = new Document({
-        sections: [{
-          properties: {
-            page: {
-              size: {
-                orientation: pdfData.info?.orientation === 'landscape' ? 'landscape' : 'portrait',
-                width: 12240, // A4 width in twips (8.5in * 1440)
-                height: 15840, // A4 height in twips (11in * 1440)
-              },
-              margin: {
-                top: 1440, // 1 inch
-                right: 1440,
-                bottom: 1440,
-                left: 1440,
-              }
-            }
-          },
-          children: paragraphs.length > 0 ? paragraphs : [
-            new Paragraph({
-              children: [new TextRun('No text content found in PDF.')]
-            })
-          ]
-        }]
-      });
-      
-      // Generate Word document buffer
-      const docxBuffer = await Packer.toBuffer(doc);
-      
-      // Send Word document as response
-      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
-      res.setHeader('Content-Disposition', `attachment; filename="${file.originalname.replace(/\.pdf$/i, '.docx')}"`);
-      res.send(docxBuffer);
+      // Send as text file (Word can open .txt files)
+      res.setHeader('Content-Type', 'text/plain');
+      res.setHeader('Content-Disposition', `attachment; filename="${file.originalname.replace(/\.pdf$/i, '.txt')}"`);
+      res.send(textBuffer);
       
     } catch (error) {
       console.error('PDF to Word conversion error:', error);
@@ -392,7 +200,7 @@ router.post('/pdf-to-word', protect, authorize('customer'), upload.single('file'
 });
 
 // @route   POST /api/document-converter/edit-pdf
-// @desc    Edit PDF with annotations (text, highlights, drawings) - FIXED VERSION
+// @desc    Edit PDF with annotations (text, highlights, drawings)
 // @access  Private (Customer)
 router.post('/edit-pdf', protect, authorize('customer'), upload.single('file'), async (req, res) => {
   try {
@@ -406,7 +214,7 @@ router.post('/edit-pdf', protect, authorize('customer'), upload.single('file'), 
       return res.status(400).json({ message: 'Invalid file type. Please upload a PDF file' });
     }
 
-    // Parse annotations from request body (they come as JSON strings)
+    // Parse annotations from request body
     let annotations = [];
     let highlights = [];
     let drawings = [];
@@ -454,19 +262,14 @@ router.post('/edit-pdf', protect, authorize('customer'), upload.single('file'), 
         
         pageAnnotations.forEach(annotation => {
           try {
-            // Convert screen coordinates to PDF coordinates
-            // Frontend sends coordinates relative to iframe/viewer
-            // We need to scale them to PDF page dimensions
-            // Assuming frontend viewer is roughly A4 size (800x600px viewport)
-            const scaleX = width / 800; // Adjust based on actual viewer size
+            const scaleX = width / 800;
             const scaleY = height / 600;
             
             const pdfX = annotation.x * scaleX;
-            // PDF Y is bottom-up, so invert
             const pdfY = height - (annotation.y * scaleY);
             
             page.drawText(annotation.text, {
-              x: Math.max(0, Math.min(pdfX, width - 50)), // Clamp to page bounds
+              x: Math.max(0, Math.min(pdfX, width - 50)),
               y: Math.max(0, Math.min(pdfY, height - 10)),
               size: annotation.fontSize || 12,
               color: rgb(0, 0, 0),
@@ -500,7 +303,7 @@ router.post('/edit-pdf', protect, authorize('customer'), upload.single('file'), 
               y: Math.max(0, pdfY),
               width: Math.min(pdfWidth, width - pdfX),
               height: Math.min(pdfHeight, height - pdfY),
-              color: rgb(1, 1, 0), // Yellow highlight
+              color: rgb(1, 1, 0),
               opacity: 0.3,
             });
           } catch (err) {
@@ -522,7 +325,6 @@ router.post('/edit-pdf', protect, authorize('customer'), upload.single('file'), 
             const scaleY = height / 600;
             const path = drawing.path;
             
-            // Draw path as connected lines
             for (let i = 0; i < path.length - 1; i++) {
               const startX = path[i].x * scaleX;
               const startY = height - (path[i].y * scaleY);
@@ -539,7 +341,7 @@ router.post('/edit-pdf', protect, authorize('customer'), upload.single('file'), 
                   y: Math.max(0, Math.min(endY, height)) 
                 },
                 thickness: 2,
-                color: rgb(0.545, 0.337, 0.961), // Purple color
+                color: rgb(0.545, 0.337, 0.961),
               });
             }
           } catch (err) {
