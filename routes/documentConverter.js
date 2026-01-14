@@ -33,7 +33,15 @@ const getBrowser = async () => {
   if (!browserInstance) {
     browserInstance = await puppeteer.launch({
       headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+        '--disable-software-rasterizer'
+      ],
+      // For Render.com, use system Chrome if available
+      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined
     });
   }
   return browserInstance;
