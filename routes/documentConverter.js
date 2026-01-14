@@ -4,7 +4,23 @@ const { protect, authorize } = require('../middleware/auth');
 const multer = require('multer');
 const pdfParse = require('pdf-parse');
 const { PDFDocument: PDFLib, rgb } = require('pdf-lib');
-const libre = require('libreoffice-convert');
+const mammoth = require('mammoth');
+const PDFDocument = require('pdfkit');
+const {
+  Document,
+  Packer,
+  Paragraph,
+  TextRun,
+  HeadingLevel,
+  Table,
+  TableRow,
+  TableCell,
+  WidthType,
+} = require('docx');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { spawn, spawnSync } = require('child_process');
 
 // Configure multer for memory storage
 const storage = multer.memoryStorage();
@@ -16,31 +32,223 @@ const upload = multer({
 });
 
 /**
- * REQUIRED SYSTEM DEPENDENCY:
- * LibreOffice must be installed on the server for high-fidelity conversions.
- *
- * Render build command example:
- * apt-get update && apt-get install -y libreoffice && npm install
- *
- * REQUIRED NPM PACKAGE:
- * npm install libreoffice-convert pdf-parse pdf-lib
+ * IMPORTANT:
+ * - No GPT-based reconstruction is used for conversion.
+ * - Conversion is deterministic and lightweight.
+ * - Optional Python-based pdf2docx can be used if installed:
+ *   pip install pdf2docx
  */
 
-const convertWithLibreOffice = (buffer, targetExt) => new Promise((resolve, reject) => {
-  libre.convert(buffer, targetExt, undefined, (err, done) => {
-    if (err) return reject(err);
-    resolve(done);
+const commandExists = (cmd) => {
+  const isWindows = process.platform === 'win32';
+  const checkCmd = isWindows ? 'where' : 'which';
+  const result = spawnSync(checkCmd, [cmd], { stdio: 'ignore' });
+  return result.status === 0;
+};
+
+const runCommand = (cmd, args, options = {}) => new Promise((resolve, reject) => {
+  const child = spawn(cmd, args, options);
+  let stderr = '';
+  child.on('error', (error) => reject(error));
+  if (child.stderr) {
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString();
+    });
+  }
+  child.on('close', (code) => {
+    if (code === 0) {
+      resolve();
+    } else {
+      reject(new Error(stderr || `${cmd} exited with code ${code}`));
+    }
   });
 });
 
-const isLibreOfficeMissing = (error) => {
-  const message = (error && error.message) ? error.message.toLowerCase() : '';
-  return (
-    message.includes('soffice') ||
-    message.includes('libreoffice') ||
-    message.includes('not found') ||
-    error?.code === 'ENOENT'
-  );
+const decodeHtml = (html) => html
+  .replace(/&nbsp;/g, ' ')
+  .replace(/&amp;/g, '&')
+  .replace(/&lt;/g, '<')
+  .replace(/&gt;/g, '>')
+  .replace(/&quot;/g, '"')
+  .replace(/&#39;/g, "'");
+
+const extractBlocksFromHtml = (html) => {
+  const blocks = [];
+  const normalized = html
+    .replace(/\r/g, '')
+    .replace(/<\/p>\s*<p>/g, '</p>\n<p>')
+    .replace(/<\/li>\s*<li>/g, '</li>\n<li>');
+
+  const blockRegex = /<(h1|h2|h3|p|li)[^>]*>([\s\S]*?)<\/\1>/gi;
+  let match;
+  while ((match = blockRegex.exec(normalized))) {
+    const tag = match[1].toLowerCase();
+    const text = decodeHtml(match[2].replace(/<[^>]+>/g, '').trim());
+    if (!text) continue;
+    blocks.push({ type: tag, text });
+  }
+  return blocks;
+};
+
+const convertWithLibreOfficeCli = async (buffer, inputExt) => {
+  const libreOfficeCmd = commandExists('soffice') ? 'soffice' : (commandExists('libreoffice') ? 'libreoffice' : null);
+  if (!libreOfficeCmd) return null;
+
+  const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'word2pdf-'));
+  const inputPath = path.join(tmpDir, `input${inputExt}`);
+  const outputPath = path.join(tmpDir, 'input.pdf');
+
+  await fs.promises.writeFile(inputPath, buffer);
+  await runCommand(libreOfficeCmd, ['--headless', '--convert-to', 'pdf', '--outdir', tmpDir, inputPath], {
+    cwd: tmpDir,
+    stdio: 'ignore'
+  });
+
+  try {
+    const pdfBuffer = await fs.promises.readFile(outputPath);
+    await fs.promises.rm(tmpDir, { recursive: true, force: true });
+    return pdfBuffer;
+  } catch (error) {
+    await fs.promises.rm(tmpDir, { recursive: true, force: true });
+    return null;
+  }
+};
+
+const ocrPdfToText = async (buffer) => {
+  const canOcr = process.env.ENABLE_OCR === 'true' && commandExists('tesseract') && commandExists('pdftoppm');
+  if (!canOcr) return null;
+
+  const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'pdf-ocr-'));
+  const inputPath = path.join(tmpDir, 'input.pdf');
+  const imagePrefix = path.join(tmpDir, 'page');
+
+  await fs.promises.writeFile(inputPath, buffer);
+  await runCommand('pdftoppm', ['-r', '200', '-png', inputPath, imagePrefix], { cwd: tmpDir, stdio: 'ignore' });
+
+  const files = await fs.promises.readdir(tmpDir);
+  const images = files.filter((file) => file.startsWith('page-') && file.endsWith('.png')).sort();
+
+  let fullText = '';
+  for (const image of images) {
+    const imagePath = path.join(tmpDir, image);
+    const outputBase = path.join(tmpDir, image.replace(/\.png$/, ''));
+    const outputTxtPath = `${outputBase}.txt`;
+    await runCommand('tesseract', [imagePath, outputBase], {
+      cwd: tmpDir,
+      stdio: 'ignore'
+    });
+    if (fs.existsSync(outputTxtPath)) {
+      const text = await fs.promises.readFile(outputTxtPath, 'utf-8');
+      fullText += `${text}\n`;
+    }
+  }
+
+  await fs.promises.rm(tmpDir, { recursive: true, force: true });
+  return fullText.trim() ? fullText : null;
+};
+
+const buildDocxFromText = async (text) => {
+  const paragraphs = [];
+  const lines = text.split('\n');
+  const blocks = [];
+
+  let current = [];
+  lines.forEach((line) => {
+    if (!line.trim()) {
+      if (current.length) {
+        blocks.push(current.join('\n').trim());
+        current = [];
+      }
+      return;
+    }
+    current.push(line.trim());
+  });
+  if (current.length) blocks.push(current.join('\n').trim());
+
+  const isHeading = (line) => {
+    if (line.length > 80) return false;
+    const upper = line.toUpperCase();
+    return line === upper && /[A-Z]/.test(line);
+  };
+
+  const isBullet = (line) => /^[\u2022\-*•–]\s+/.test(line);
+
+  const parseTableRow = (line) => line.split(/\s{2,}/).map((cell) => cell.trim()).filter(Boolean);
+
+  blocks.forEach((block) => {
+    const blockLines = block.split('\n').map((part) => part.trim()).filter(Boolean);
+    const tableRows = blockLines
+      .map(parseTableRow)
+      .filter((row) => row.length > 1);
+
+    if (tableRows.length >= 2 && tableRows.every((row) => row.length === tableRows[0].length)) {
+      const rows = tableRows.map((row) => new TableRow({
+        children: row.map((cell) => new TableCell({
+          width: { size: 100 / row.length, type: WidthType.PERCENTAGE },
+          children: [new Paragraph(cell)]
+        }))
+      }));
+      paragraphs.push(new Table({ rows }));
+      return;
+    }
+
+    if (blockLines.length && blockLines.every(isBullet)) {
+      blockLines.forEach((line) => {
+        const clean = line.replace(/^[\u2022\-*•–]\s+/, '').trim();
+        paragraphs.push(new Paragraph({
+          text: clean,
+          bullet: { level: 0 }
+        }));
+      });
+      return;
+    }
+
+    if (isHeading(block)) {
+      paragraphs.push(new Paragraph({
+        text: block,
+        heading: HeadingLevel.HEADING_1
+      }));
+      return;
+    }
+
+    paragraphs.push(new Paragraph({
+      children: [new TextRun(block)]
+    }));
+  });
+
+  const doc = new Document({
+    sections: [{ children: paragraphs }]
+  });
+
+  return Packer.toBuffer(doc);
+};
+
+const convertPdfToDocxWithPdf2Docx = async (buffer) => {
+  const pythonCandidates = ['python3', 'python'].filter(commandExists);
+  if (!pythonCandidates.length) return null;
+
+  const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'pdf2docx-'));
+  const inputPath = path.join(tmpDir, 'input.pdf');
+  const outputPath = path.join(tmpDir, 'output.docx');
+
+  await fs.promises.writeFile(inputPath, buffer);
+
+  for (const pythonCmd of pythonCandidates) {
+    try {
+      await runCommand(pythonCmd, ['-m', 'pdf2docx', 'convert', inputPath, outputPath], {
+        cwd: tmpDir,
+        stdio: 'ignore'
+      });
+      const docxBuffer = await fs.promises.readFile(outputPath);
+      await fs.promises.rm(tmpDir, { recursive: true, force: true });
+      return docxBuffer;
+    } catch (error) {
+      // Try next python candidate
+    }
+  }
+
+  await fs.promises.rm(tmpDir, { recursive: true, force: true });
+  return null;
 };
 
 // @route   POST /api/document-converter/word-to-pdf
@@ -65,19 +273,64 @@ router.post('/word-to-pdf', protect, authorize('customer'), upload.single('file'
     }
 
     try {
-      const pdfBuffer = await convertWithLibreOffice(file.buffer, '.pdf');
+      const fileExt = file.originalname.toLowerCase().endsWith('.doc') ? '.doc' : '.docx';
+      const libreOfficePdf = await convertWithLibreOfficeCli(file.buffer, fileExt);
+      if (libreOfficePdf) {
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="${file.originalname.replace(/\.(doc|docx)$/i, '.pdf')}"`);
+        return res.send(libreOfficePdf);
+      }
 
+      if (fileExt === '.doc') {
+        return res.status(400).json({
+          message: 'This server cannot convert .doc files without LibreOffice.',
+          details: 'Install LibreOffice or upload a .docx file for lightweight conversion.'
+        });
+      }
+
+      const { value: html } = await mammoth.convertToHtml({ buffer: file.buffer });
+      const blocks = extractBlocksFromHtml(html);
+
+      const doc = new PDFDocument({
+        size: 'A4',
+        margins: { top: 50, bottom: 50, left: 50, right: 50 }
+      });
+
+      const chunks = [];
+      doc.on('data', (chunk) => chunks.push(chunk));
+
+      if (!blocks.length) {
+        const rawText = (await mammoth.extractRawText({ buffer: file.buffer })).value || '';
+        doc.font('Helvetica').fontSize(12).text(rawText.trim());
+      } else {
+        blocks.forEach((block) => {
+          if (block.type === 'h1') {
+            doc.font('Helvetica-Bold').fontSize(18).text(block.text, { align: 'left' });
+            doc.moveDown(0.5);
+          } else if (block.type === 'h2') {
+            doc.font('Helvetica-Bold').fontSize(16).text(block.text, { align: 'left' });
+            doc.moveDown(0.4);
+          } else if (block.type === 'h3') {
+            doc.font('Helvetica-Bold').fontSize(14).text(block.text, { align: 'left' });
+            doc.moveDown(0.3);
+          } else if (block.type === 'li') {
+            doc.font('Helvetica').fontSize(12).text(`• ${block.text}`, { indent: 20 });
+          } else {
+            doc.font('Helvetica').fontSize(12).text(block.text, { align: 'left' });
+            doc.moveDown(0.2);
+          }
+        });
+      }
+
+      doc.end();
+      await new Promise((resolve) => doc.on('end', resolve));
+
+      const pdfBuffer = Buffer.concat(chunks);
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', `attachment; filename="${file.originalname.replace(/\.(doc|docx)$/i, '.pdf')}"`);
       res.send(pdfBuffer);
     } catch (error) {
       console.error('Word to PDF conversion error:', error);
-      if (isLibreOfficeMissing(error)) {
-        return res.status(500).json({
-          message: 'LibreOffice is required for high-fidelity conversion. Please install LibreOffice on the server.',
-          details: 'Render build command example: apt-get update && apt-get install -y libreoffice'
-        });
-      }
       return res.status(500).json({
         message: 'Conversion failed',
         error: error.message,
@@ -105,29 +358,36 @@ router.post('/pdf-to-word', protect, authorize('customer'), upload.single('file'
     }
 
     try {
-      // Detect scanned PDFs (no extractable text)
       const pdfData = await pdfParse(file.buffer);
-      const extractedText = pdfData.text || '';
-      if (!extractedText.trim()) {
+      let extractedText = (pdfData.text || '').trim();
+
+      if (!extractedText) {
+        const ocrText = await ocrPdfToText(file.buffer);
+        if (ocrText) {
+          extractedText = ocrText;
+        }
+      }
+
+      if (!extractedText) {
         return res.status(400).json({
           message: 'PDF appears to be scanned or image-based. OCR is required for text extraction.',
-          details: 'Install an OCR engine (e.g., Tesseract) or use an OCR-enabled conversion service.'
+          details: 'Optional OCR: set ENABLE_OCR=true and install tesseract + poppler (pdftoppm).'
         });
       }
 
-      const docxBuffer = await convertWithLibreOffice(file.buffer, '.docx');
+      const docxBuffer = await convertPdfToDocxWithPdf2Docx(file.buffer);
+      if (docxBuffer) {
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+        res.setHeader('Content-Disposition', `attachment; filename="${file.originalname.replace(/\.pdf$/i, '.docx')}"`);
+        return res.send(docxBuffer);
+      }
 
+      const lightweightDocx = await buildDocxFromText(extractedText);
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
       res.setHeader('Content-Disposition', `attachment; filename="${file.originalname.replace(/\.pdf$/i, '.docx')}"`);
-      res.send(docxBuffer);
+      res.send(lightweightDocx);
     } catch (error) {
       console.error('PDF to Word conversion error:', error);
-      if (isLibreOfficeMissing(error)) {
-        return res.status(500).json({
-          message: 'LibreOffice is required for high-fidelity conversion. Please install LibreOffice on the server.',
-          details: 'Render build command example: apt-get update && apt-get install -y libreoffice'
-        });
-      }
       return res.status(500).json({
         message: 'Conversion failed',
         error: error.message,
