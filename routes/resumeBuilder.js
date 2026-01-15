@@ -1,6 +1,8 @@
 const express = require('express');
 const router = express.Router();
-const { protect, authorizeProAccess } = require('../middleware/auth');
+const auth = require('../middleware/auth');
+const protect = auth.protect;
+const authorizeProAccess = auth.authorizeProAccess || auth.authorize?.('customer');
 const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
