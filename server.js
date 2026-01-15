@@ -96,6 +96,7 @@ app.use('/api/chatbot', require('./routes/chatbot'));
 app.use('/api/page-content', require('./routes/pageContent'));
 app.use('/api/text-content', require('./routes/textContent'));
 app.use('/api/document-converter', require('./routes/documentConverter'));
+app.use('/api/hiring-pro', require('./routes/hiringPro'));
 
 // Redirect common OAuth routes that are missing /api prefix
 app.get('/auth/google', (req, res) => {
