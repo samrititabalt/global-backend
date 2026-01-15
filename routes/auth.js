@@ -297,7 +297,8 @@ router.post('/login', [
           tokenBalance: user.tokenBalance,
           serviceCategory: user.serviceCategory,
           isOnline: user.isOnline,
-          isActive: user.isActive
+          isActive: user.isActive,
+          pro_access_enabled: user.pro_access_enabled
         }
       });
       console.log(`Admin login successful for owner: ${user.email}`);
@@ -333,7 +334,8 @@ router.post('/login', [
         tokenBalance: user.tokenBalance,
         serviceCategory: user.serviceCategory,
         isOnline: user.isOnline,
-        isActive: user.isActive // Include isActive status so frontend can show warning if needed
+        isActive: user.isActive, // Include isActive status so frontend can show warning if needed
+        pro_access_enabled: user.pro_access_enabled
       }
     });
     console.log(`Login successful for ${user.role}: ${user.email} (Active: ${user.isActive})`);

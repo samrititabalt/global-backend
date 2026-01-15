@@ -1675,7 +1675,7 @@ router.get('/crm/customers', protect, authorize('admin'), async (req, res) => {
 router.get('/crm/agents', protect, authorize('admin'), async (req, res) => {
   try {
     const agents = await User.find({ role: 'agent' })
-      .select('name email phone serviceCategory serviceCategories isActive isOnline createdAt')
+      .select('name email phone serviceCategory serviceCategories isActive isOnline createdAt pro_access_enabled pro_access_granted_by pro_access_granted_at')
       .populate('serviceCategory', 'name')
       .populate('serviceCategories', 'name')
       .sort({ createdAt: -1 });
@@ -1683,6 +1683,43 @@ router.get('/crm/agents', protect, authorize('admin'), async (req, res) => {
     res.json({ success: true, agents });
   } catch (error) {
     console.error('Error fetching agents:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   PUT /api/admin/agents/:id/pro-access
+// @desc    Enable/disable global Pro access for an agent
+// @access  Private (Admin)
+router.put('/agents/:id/pro-access', protect, authorize('admin'), async (req, res) => {
+  try {
+    const { enabled } = req.body;
+    if (typeof enabled !== 'boolean') {
+      return res.status(400).json({ message: 'enabled must be a boolean' });
+    }
+
+    const agent = await User.findOne({ _id: req.params.id, role: 'agent' });
+    if (!agent) {
+      return res.status(404).json({ message: 'Agent not found' });
+    }
+
+    agent.pro_access_enabled = enabled;
+    agent.pro_access_granted_by = enabled ? req.user._id : null;
+    agent.pro_access_granted_at = enabled ? new Date() : null;
+    await agent.save();
+
+    res.json({
+      success: true,
+      agent: {
+        _id: agent._id,
+        name: agent.name,
+        email: agent.email,
+        pro_access_enabled: agent.pro_access_enabled,
+        pro_access_granted_by: agent.pro_access_granted_by,
+        pro_access_granted_at: agent.pro_access_granted_at,
+      }
+    });
+  } catch (error) {
+    console.error('Error updating pro access:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 });

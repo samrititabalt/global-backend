@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { protect, authorize } = require('../middleware/auth');
+const { protect, authorizeProAccess } = require('../middleware/auth');
 const multer = require('multer');
 const pdfParse = require('pdf-parse');
 const { PDFDocument: PDFLib, rgb } = require('pdf-lib');
@@ -254,7 +254,7 @@ const convertPdfToDocxWithPdf2Docx = async (buffer) => {
 // @route   POST /api/document-converter/word-to-pdf
 // @desc    Convert Word document (.doc or .docx) to PDF (preserves formatting)
 // @access  Private (Customer)
-router.post('/word-to-pdf', protect, authorize('customer'), upload.single('file'), async (req, res) => {
+router.post('/word-to-pdf', protect, authorizeProAccess, upload.single('file'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ message: 'No file uploaded' });
@@ -346,7 +346,7 @@ router.post('/word-to-pdf', protect, authorize('customer'), upload.single('file'
 // @route   POST /api/document-converter/pdf-to-word
 // @desc    Convert PDF document to Word (.docx) (preserves formatting when possible)
 // @access  Private (Customer)
-router.post('/pdf-to-word', protect, authorize('customer'), upload.single('file'), async (req, res) => {
+router.post('/pdf-to-word', protect, authorizeProAccess, upload.single('file'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ message: 'No file uploaded' });
@@ -403,7 +403,7 @@ router.post('/pdf-to-word', protect, authorize('customer'), upload.single('file'
 // @route   POST /api/document-converter/edit-pdf
 // @desc    Edit PDF with annotations (text, highlights, drawings)
 // @access  Private (Customer)
-router.post('/edit-pdf', protect, authorize('customer'), upload.single('file'), async (req, res) => {
+router.post('/edit-pdf', protect, authorizeProAccess, upload.single('file'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ message: 'No file uploaded' });

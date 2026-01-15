@@ -141,6 +141,20 @@ const userSchema = new mongoose.Schema({
     type: Number,
     default: 100
   },
+  // Agent-only: global access to all Sam Studios Pro solutions
+  pro_access_enabled: {
+    type: Boolean,
+    default: false
+  },
+  pro_access_granted_by: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null
+  },
+  pro_access_granted_at: {
+    type: Date,
+    default: null
+  },
   createdAt: {
     type: Date,
     default: Date.now

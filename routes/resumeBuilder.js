@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { protect, authorize } = require('../middleware/auth');
+const { protect, authorizeProAccess } = require('../middleware/auth');
 const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
@@ -45,7 +45,7 @@ const upload = multer({
 // @route   GET /api/resume-builder/usage
 // @desc    Get customer's remaining usage
 // @access  Private (Customer)
-router.get('/usage', protect, authorize('customer'), async (req, res) => {
+router.get('/usage', protect, authorizeProAccess, async (req, res) => {
   try {
     const user = await User.findById(req.user._id);
     
@@ -75,7 +75,7 @@ router.get('/usage', protect, authorize('customer'), async (req, res) => {
 // @route   POST /api/resume-builder/generate
 // @desc    Generate resume using GPT-4 Mini
 // @access  Private (Customer)
-router.post('/generate', protect, authorize('customer'), upload.single('profileImage'), async (req, res) => {
+router.post('/generate', protect, authorizeProAccess, upload.single('profileImage'), async (req, res) => {
   let imagePath = null;
   
   try {
@@ -243,7 +243,7 @@ Generate the complete resume HTML now. Make sure it's professional, well-formatt
 // @route   DELETE /api/resume-builder/image
 // @desc    Delete uploaded image (cleanup endpoint)
 // @access  Private (Customer)
-router.delete('/image', protect, authorize('customer'), async (req, res) => {
+router.delete('/image', protect, authorizeProAccess, async (req, res) => {
   try {
     const userId = req.user._id.toString();
     const uploadPath = 'uploads/resume-images/';
