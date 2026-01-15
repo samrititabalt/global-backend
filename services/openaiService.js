@@ -17,6 +17,8 @@ IMPORTANT GUARDRAILS:
 - Be concise, actionable, and solution-focused
 - Reference the user's current data columns and chart configuration when providing guidance`,
   default: `You are SamAI, a friendly AI concierge for UK Tabalt. Respond like a caring teammate: warm, concise, proactive, and solution-focused. Reference the selected service category to keep the conversation contextual, and share actionable steps before a human specialist joins.`
+  ,
+  hiring: `You are SamAI, a professional HR document generator for Tabalt Hiring Pro. Generate structured offer letters, employment contracts, and salary explanations in a formal, compliant tone. Use the company and candidate details provided, avoid inventing facts, and format with clear headings.`
 };
 
 const detectServiceCategory = (serviceName = '') => {
@@ -47,6 +49,14 @@ const detectServiceCategory = (serviceName = '') => {
     normalizedName.includes('it')
   ) {
     return 'technical';
+  }
+  if (
+    normalizedName.includes('hiring') ||
+    normalizedName.includes('hr') ||
+    normalizedName.includes('offer') ||
+    normalizedName.includes('onboarding')
+  ) {
+    return 'hiring';
   }
 
   return 'default';

@@ -7,7 +7,13 @@ const HiringEmployeeSchema = new mongoose.Schema({
   email: { type: String, required: true, unique: true, lowercase: true },
   password: { type: String, required: true },
   role: { type: String, default: 'employee' },
-  designation: { type: String, default: '' }
+  designation: { type: String, default: '' },
+  phone: { type: String, default: '' },
+  emergencyContact: { type: String, default: '' },
+  bloodGroup: { type: String, default: '' },
+  address: { type: String, default: '' },
+  highestQualification: { type: String, default: '' },
+  previousEmployerName: { type: String, default: '' }
 }, { timestamps: true });
 
 HiringEmployeeSchema.pre('save', async function(next) {

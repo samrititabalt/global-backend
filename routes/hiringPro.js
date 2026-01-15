@@ -1,13 +1,21 @@
 const express = require('express');
 const router = express.Router();
 const jwt = require('jsonwebtoken');
+const mongoose = require('mongoose');
 const crypto = require('crypto');
 const { upload, uploadToCloudinary } = require('../middleware/cloudinaryUpload');
+const { protect, authorize } = require('../middleware/auth');
 const HiringCompany = require('../models/HiringCompany');
 const HiringCompanyAdmin = require('../models/HiringCompanyAdmin');
 const HiringEmployee = require('../models/HiringEmployee');
 const HiringOfferLetter = require('../models/HiringOfferLetter');
 const { generateAIResponse } = require('../services/openaiService');
+const { mail } = require('../utils/sendEmail');
+const HiringHoliday = require('../models/HiringHoliday');
+const HiringTimesheet = require('../models/HiringTimesheet');
+const HiringDocument = require('../models/HiringDocument');
+const HiringEmployeeProfile = require('../models/HiringEmployeeProfile');
+const HiringExpense = require('../models/HiringExpense');
 
 const HIRING_TOKEN_TYPE = 'hiring-pro';
 const HIRING_SUPERADMIN_EMAIL = process.env.HIRING_SUPERADMIN_EMAIL || 'superadmin@tabalt.co.uk';
@@ -44,13 +52,18 @@ const ensureSeedCompanies = async () => {
   const existing = await HiringCompany.find({});
   if (existing.length >= 2) return;
 
+  const dummyCustomerId = new mongoose.Types.ObjectId();
   const companyA = await HiringCompany.create({
     name: 'Company A',
+    customerId: dummyCustomerId,
+    customerEmail: 'customerA@demo.company',
     logoUrl: null,
     signingAuthority: { name: 'Alice Morgan', title: 'Chief People Officer' }
   });
   const companyB = await HiringCompany.create({
     name: 'Company B',
+    customerId: dummyCustomerId,
+    customerEmail: 'customerB@demo.company',
     logoUrl: null,
     signingAuthority: { name: 'James Patel', title: 'Head of HR' }
   });
@@ -85,46 +98,82 @@ const ensureSeedCompanies = async () => {
   });
 };
 
-// Company onboarding (public)
-router.post('/companies', upload.fields([{ name: 'logo', maxCount: 1 }]), uploadToCloudinary, async (req, res) => {
+const sendHiringAdminCredentialsEmail = async (toEmail, companyName, adminEmail, adminPassword) => {
+  const html = `
+    <div style="font-family: Arial, sans-serif; color: #111;">
+      <h2>${companyName} Hiring Platform Access</h2>
+      <p>Your Hiring Platform admin credentials are ready.</p>
+      <p><strong>Admin Email:</strong> ${adminEmail}</p>
+      <p><strong>Temporary Password:</strong> ${adminPassword}</p>
+      <p>Use these credentials to log into the Hiring Platform Admin Dashboard.</p>
+    </div>
+  `;
+  await mail(toEmail, `${companyName} Hiring Platform Credentials`, html, 'tabaltllp@gmail.com', 'Tabalt Hiring Pro');
+};
+
+// Company onboarding (customer only)
+router.post('/onboard', protect, authorize('customer'), upload.fields([{ name: 'logo', maxCount: 1 }]), uploadToCloudinary, async (req, res) => {
   try {
-    const { companyName, authorityName, authorityTitle } = req.body;
-    if (!companyName || !authorityName || !authorityTitle) {
-      return res.status(400).json({ message: 'Company name and signing authority are required' });
+    const { customerEmail, companyName, authorityName, authorityTitle } = req.body;
+    if (!customerEmail || !companyName || !authorityName || !authorityTitle) {
+      return res.status(400).json({ message: 'Customer email, company name, and signing authority are required' });
+    }
+    if (customerEmail.toLowerCase() !== req.user.email.toLowerCase()) {
+      return res.status(400).json({ message: 'Customer email must match your account email.' });
     }
 
     const logoFile = req.uploadedFiles?.find(file => file.type === 'logo');
     const logoUrl = logoFile ? logoFile.url : null;
 
-    const company = await HiringCompany.create({
-      name: companyName.trim(),
-      logoUrl,
-      signingAuthority: {
-        name: authorityName.trim(),
-        title: authorityTitle.trim()
-      }
-    });
+    const company = await HiringCompany.findOneAndUpdate(
+      { customerId: req.user._id },
+      {
+        name: companyName.trim(),
+        customerId: req.user._id,
+        customerEmail: customerEmail.toLowerCase(),
+        logoUrl,
+        signingAuthority: {
+          name: authorityName.trim(),
+          title: authorityTitle.trim()
+        },
+        onboardingComplete: true
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
 
     const generatedEmail = `admin@${companyName.replace(/[^a-z0-9]/gi, '').toLowerCase() || 'company'}.demo`;
-    const generatedPassword = crypto.randomBytes(6).toString('hex');
+    let generatedPassword = null;
 
-    const companyAdmin = await HiringCompanyAdmin.create({
-      companyId: company._id,
-      name: authorityName.trim(),
-      email: generatedEmail,
-      password: generatedPassword
-    });
+    let companyAdmin = await HiringCompanyAdmin.findOne({ companyId: company._id });
+    if (!companyAdmin) {
+      generatedPassword = crypto.randomBytes(6).toString('hex');
+      companyAdmin = await HiringCompanyAdmin.create({
+        companyId: company._id,
+        name: authorityName.trim(),
+        email: generatedEmail,
+        password: generatedPassword
+      });
+      await sendHiringAdminCredentialsEmail(customerEmail, company.name, companyAdmin.email, generatedPassword);
+    }
 
     res.json({
       success: true,
       company,
-      adminCredentials: {
-        email: companyAdmin.email,
-        password: generatedPassword
-      }
+      adminCredentials: generatedPassword
+        ? { email: companyAdmin.email, password: generatedPassword }
+        : null
     });
   } catch (error) {
     console.error('Hiring Pro company onboarding error:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+router.get('/customer/company', protect, authorize('customer'), async (req, res) => {
+  try {
+    const company = await HiringCompany.findOne({ customerId: req.user._id });
+    res.json({ success: true, company });
+  } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 });
@@ -257,7 +306,7 @@ Requirements:
 - Use placeholders already provided (do not invent new names)
 Return plain text with clear headings.`;
 
-    const content = await generateAIResponse(prompt, [], 'hiring_pro');
+    const content = await generateAIResponse(prompt, [], 'hiring');
     res.json({ success: true, content });
   } catch (error) {
     console.error('Offer letter generation error:', error);
@@ -304,6 +353,337 @@ router.get('/employee/offer-letters', requireHiringAuth(['employee']), async (re
       employeeId: req.hiringUser.employeeId
     }).sort({ createdAt: -1 });
     res.json({ success: true, offerLetters });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// Employee submit timesheet
+router.post('/employee/timesheets', requireHiringAuth(['employee']), async (req, res) => {
+  try {
+    const { weekStart, weekEnd, hoursWorked } = req.body;
+    if (!weekStart || !weekEnd) {
+      return res.status(400).json({ message: 'Week start and end dates are required' });
+    }
+    const timesheet = await HiringTimesheet.create({
+      companyId: req.hiringUser.companyId,
+      employeeId: req.hiringUser.employeeId,
+      weekStart: new Date(weekStart),
+      weekEnd: new Date(weekEnd),
+      hoursWorked: Number(hoursWorked || 0),
+      status: 'pending'
+    });
+
+    const admins = await HiringCompanyAdmin.find({ companyId: req.hiringUser.companyId });
+    await Promise.all(admins.map(admin => mail(
+      admin.email,
+      'Timesheet Submitted',
+      `<p>An employee submitted a timesheet for ${weekStart} - ${weekEnd}.</p>`,
+      'tabaltllp@gmail.com',
+      'Tabalt Hiring Pro'
+    )));
+
+    res.json({ success: true, timesheet });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+router.get('/employee/timesheets', requireHiringAuth(['employee']), async (req, res) => {
+  try {
+    const timesheets = await HiringTimesheet.find({
+      companyId: req.hiringUser.companyId,
+      employeeId: req.hiringUser.employeeId
+    }).sort({ createdAt: -1 });
+    res.json({ success: true, timesheets });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// Admin view timesheets
+router.get('/company/timesheets', requireHiringAuth(['company_admin']), async (req, res) => {
+  try {
+    const timesheets = await HiringTimesheet.find({ companyId: req.hiringUser.companyId })
+      .populate('employeeId', 'name email');
+    res.json({ success: true, timesheets });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// Admin update timesheet
+router.put('/company/timesheets/:id', requireHiringAuth(['company_admin']), async (req, res) => {
+  try {
+    const { status, hoursWorked } = req.body;
+    const timesheet = await HiringTimesheet.findOne({
+      _id: req.params.id,
+      companyId: req.hiringUser.companyId
+    });
+    if (!timesheet) return res.status(404).json({ message: 'Timesheet not found' });
+    if (hoursWorked !== undefined) timesheet.hoursWorked = Number(hoursWorked);
+    if (status) timesheet.status = status;
+    await timesheet.save();
+
+    const employee = await HiringEmployee.findById(timesheet.employeeId);
+    if (employee) {
+      await mail(
+        employee.email,
+        'Timesheet Update',
+        `<p>Your timesheet has been ${timesheet.status}.</p>`,
+        'tabaltllp@gmail.com',
+        'Tabalt Hiring Pro'
+      );
+    }
+    res.json({ success: true, timesheet });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// Employee submit holiday request
+router.post('/employee/holidays', requireHiringAuth(['employee']), async (req, res) => {
+  try {
+    const { startDate, endDate, reason } = req.body;
+    if (!startDate || !endDate) {
+      return res.status(400).json({ message: 'Start and end dates are required' });
+    }
+    const holiday = await HiringHoliday.create({
+      companyId: req.hiringUser.companyId,
+      employeeId: req.hiringUser.employeeId,
+      startDate: new Date(startDate),
+      endDate: new Date(endDate),
+      notes: reason || '',
+      status: 'pending'
+    });
+
+    const admins = await HiringCompanyAdmin.find({ companyId: req.hiringUser.companyId });
+    await Promise.all(admins.map(admin => mail(
+      admin.email,
+      'Holiday Request Submitted',
+      `<p>An employee requested holiday from ${startDate} to ${endDate}.</p>`,
+      'tabaltllp@gmail.com',
+      'Tabalt Hiring Pro'
+    )));
+
+    res.json({ success: true, holiday });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+router.get('/employee/holidays', requireHiringAuth(['employee']), async (req, res) => {
+  try {
+    const holidays = await HiringHoliday.find({
+      companyId: req.hiringUser.companyId,
+      employeeId: req.hiringUser.employeeId
+    }).sort({ createdAt: -1 });
+    res.json({ success: true, holidays });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+router.get('/company/holidays', requireHiringAuth(['company_admin']), async (req, res) => {
+  try {
+    const holidays = await HiringHoliday.find({ companyId: req.hiringUser.companyId })
+      .populate('employeeId', 'name email');
+    res.json({ success: true, holidays });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+router.put('/company/holidays/:id', requireHiringAuth(['company_admin']), async (req, res) => {
+  try {
+    const { status } = req.body;
+    const holiday = await HiringHoliday.findOne({ _id: req.params.id, companyId: req.hiringUser.companyId });
+    if (!holiday) return res.status(404).json({ message: 'Holiday not found' });
+    if (status) holiday.status = status;
+    await holiday.save();
+    const employee = await HiringEmployee.findById(holiday.employeeId);
+    if (employee) {
+      await mail(
+        employee.email,
+        'Holiday Request Update',
+        `<p>Your holiday request has been ${holiday.status}.</p>`,
+        'tabaltllp@gmail.com',
+        'Tabalt Hiring Pro'
+      );
+    }
+    res.json({ success: true, holiday });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// Employee submit expense (future-ready)
+router.post('/employee/expenses', requireHiringAuth(['employee']), async (req, res) => {
+  try {
+    const { amount, description } = req.body;
+    if (!amount || !description) {
+      return res.status(400).json({ message: 'Amount and description are required' });
+    }
+    const expense = await HiringExpense.create({
+      companyId: req.hiringUser.companyId,
+      employeeId: req.hiringUser.employeeId,
+      amount: Number(amount),
+      description,
+      status: 'pending'
+    });
+    const admins = await HiringCompanyAdmin.find({ companyId: req.hiringUser.companyId });
+    await Promise.all(admins.map(admin => mail(
+      admin.email,
+      'Expense Submitted',
+      `<p>An employee submitted an expense: ${description} (£${amount}).</p>`,
+      'tabaltllp@gmail.com',
+      'Tabalt Hiring Pro'
+    )));
+    res.json({ success: true, expense });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+router.get('/employee/expenses', requireHiringAuth(['employee']), async (req, res) => {
+  try {
+    const expenses = await HiringExpense.find({
+      companyId: req.hiringUser.companyId,
+      employeeId: req.hiringUser.employeeId
+    }).sort({ createdAt: -1 });
+    res.json({ success: true, expenses });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+router.get('/company/expenses', requireHiringAuth(['company_admin']), async (req, res) => {
+  try {
+    const expenses = await HiringExpense.find({ companyId: req.hiringUser.companyId })
+      .populate('employeeId', 'name email');
+    res.json({ success: true, expenses });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+router.put('/company/expenses/:id', requireHiringAuth(['company_admin']), async (req, res) => {
+  try {
+    const { status } = req.body;
+    const expense = await HiringExpense.findOne({ _id: req.params.id, companyId: req.hiringUser.companyId });
+    if (!expense) return res.status(404).json({ message: 'Expense not found' });
+    if (status) expense.status = status;
+    await expense.save();
+    const employee = await HiringEmployee.findById(expense.employeeId);
+    if (employee) {
+      await mail(
+        employee.email,
+        'Expense Update',
+        `<p>Your expense request has been ${expense.status}.</p>`,
+        'tabaltllp@gmail.com',
+        'Tabalt Hiring Pro'
+      );
+    }
+    res.json({ success: true, expense });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// Employee profile update
+router.put('/employee/profile', requireHiringAuth(['employee']), async (req, res) => {
+  try {
+    const updates = req.body || {};
+    const profile = await HiringEmployeeProfile.findOneAndUpdate(
+      { employeeId: req.hiringUser.employeeId, companyId: req.hiringUser.companyId },
+      { ...updates, employeeId: req.hiringUser.employeeId, companyId: req.hiringUser.companyId },
+      { new: true, upsert: true, setDefaultsOnInsert: true }
+    );
+    res.json({ success: true, profile });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+router.get('/employee/profile', requireHiringAuth(['employee']), async (req, res) => {
+  try {
+    const employee = await HiringEmployee.findOne({
+      _id: req.hiringUser.employeeId,
+      companyId: req.hiringUser.companyId
+    });
+    if (!employee) return res.status(404).json({ message: 'Employee not found' });
+    const profile = await HiringEmployeeProfile.findOne({
+      employeeId: employee._id,
+      companyId: req.hiringUser.companyId
+    });
+    res.json({ success: true, employee, profile });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+router.post('/employee/documents', requireHiringAuth(['employee']), upload.fields([{ name: 'document', maxCount: 1 }]), uploadToCloudinary, async (req, res) => {
+  try {
+    const { title, type } = req.body;
+    const docFile = req.uploadedFiles?.find(file => file.type === 'document');
+    if (!docFile) return res.status(400).json({ message: 'Document upload is required' });
+    const doc = await HiringDocument.create({
+      companyId: req.hiringUser.companyId,
+      employeeId: req.hiringUser.employeeId,
+      title: title || docFile.name,
+      type: type || 'document',
+      fileUrl: docFile.url,
+      content: docFile.url,
+      createdBy: req.hiringUser.employeeId,
+      createdByRole: 'employee'
+    });
+    res.json({ success: true, document: doc });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+router.get('/employee/documents', requireHiringAuth(['employee']), async (req, res) => {
+  try {
+    const documents = await HiringDocument.find({
+      companyId: req.hiringUser.companyId,
+      employeeId: req.hiringUser.employeeId
+    });
+    res.json({ success: true, documents });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+router.get('/employee/salary-breakdown', requireHiringAuth(['employee']), async (req, res) => {
+  try {
+    const offerLetter = await HiringOfferLetter.findOne({
+      companyId: req.hiringUser.companyId,
+      employeeId: req.hiringUser.employeeId
+    }).sort({ createdAt: -1 });
+    res.json({ success: true, ctcBreakdown: offerLetter?.ctcBreakdown || '' });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// Admin employee detail view
+router.get('/company/employees/:id', requireHiringAuth(['company_admin']), async (req, res) => {
+  try {
+    const employee = await HiringEmployee.findOne({
+      _id: req.params.id,
+      companyId: req.hiringUser.companyId
+    });
+    if (!employee) return res.status(404).json({ message: 'Employee not found' });
+    const [timesheets, holidays, documents, offerLetters, profile, expenses] = await Promise.all([
+      HiringTimesheet.find({ companyId: req.hiringUser.companyId, employeeId: employee._id }),
+      HiringHoliday.find({ companyId: req.hiringUser.companyId, employeeId: employee._id }),
+      HiringDocument.find({ companyId: req.hiringUser.companyId, employeeId: employee._id }),
+      HiringOfferLetter.find({ companyId: req.hiringUser.companyId, employeeId: employee._id }),
+      HiringEmployeeProfile.findOne({ companyId: req.hiringUser.companyId, employeeId: employee._id }),
+      HiringExpense.find({ companyId: req.hiringUser.companyId, employeeId: employee._id })
+    ]);
+    res.json({ success: true, employee, profile, timesheets, holidays, documents, offerLetters, expenses });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
   }

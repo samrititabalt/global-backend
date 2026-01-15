@@ -5,8 +5,10 @@ const HiringDocumentSchema = new mongoose.Schema({
   employeeId: { type: mongoose.Schema.Types.ObjectId, ref: 'HiringEmployee', default: null },
   title: { type: String, required: true },
   type: { type: String, required: true },
+  fileUrl: { type: String, default: null },
   content: { type: String, required: true },
-  createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'HiringCompanyAdmin', required: true }
+  createdBy: { type: mongoose.Schema.Types.ObjectId, required: true },
+  createdByRole: { type: String, default: 'employee' }
 }, { timestamps: true });
 
 module.exports = mongoose.model('HiringDocument', HiringDocumentSchema);
