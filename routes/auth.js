@@ -129,6 +129,7 @@ router.post('/register', upload.fields([{ name: 'avatar', maxCount: 1 }]), uploa
         phone,
         country,
         password,
+        plainPassword: password,
         role: 'customer',
         avatar: avatarUrl
       });
@@ -472,7 +473,7 @@ router.get('/services', protect, async (req, res) => {
 // @access  Public
 router.post('/forgot-password', [
   body('email').isEmail().withMessage('Please provide a valid email'),
-  body('role').isIn(['customer', 'agent', 'admin']).withMessage('Invalid user role')
+  body('role').isIn(['customer', 'agent']).withMessage('Invalid user role')
 ], async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -535,7 +536,7 @@ router.post('/forgot-password', [
 // @access  Public
 router.post('/verify-reset-otp', [
   body('email').isEmail().withMessage('Please provide a valid email'),
-  body('role').isIn(['customer', 'agent', 'admin']).withMessage('Invalid user role'),
+  body('role').isIn(['customer', 'agent']).withMessage('Invalid user role'),
   body('otp').isLength({ min: 6, max: 6 }).withMessage('OTP must be 6 digits')
 ], async (req, res) => {
   try {
@@ -592,7 +593,7 @@ router.post('/verify-reset-otp', [
 // @access  Public
 router.post('/reset-password', [
   body('email').isEmail().withMessage('Please provide a valid email'),
-  body('role').isIn(['customer', 'agent', 'admin']).withMessage('Invalid user role'),
+  body('role').isIn(['customer', 'agent']).withMessage('Invalid user role'),
   body('resetToken').notEmpty().withMessage('Reset token is required'),
   body('password').isLength({ min: 6 }).withMessage('Password must be at least 6 characters')
 ], async (req, res) => {
@@ -620,6 +621,9 @@ router.post('/reset-password', [
 
     // Set new password
     user.password = password;
+    if (role === 'agent' || role === 'customer') {
+      user.plainPassword = password;
+    }
     user.resetPasswordToken = undefined;
     user.resetPasswordExpire = undefined;
     await user.save();

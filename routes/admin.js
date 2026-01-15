@@ -801,6 +801,7 @@ router.delete('/transactions/:id', protect, authorize('admin'), async (req, res)
 router.get('/customers', protect, authorize('admin'), async (req, res) => {
   try {
     const customers = await User.find({ role: 'customer' })
+      .select('+plainPassword')
       .populate('currentPlan', 'name price tokens')
       .sort({ createdAt: -1 });
 
@@ -855,6 +856,7 @@ router.post('/customers', protect, authorize('admin'), upload.fields([{ name: 'a
       phone: phone.trim(),
       country: country.trim(),
       password: hashedPassword,
+      plainPassword: password,
       role: 'customer',
       avatar: avatarUrl
     };
