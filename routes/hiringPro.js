@@ -9,6 +9,7 @@ const HiringCompany = require('../models/HiringCompany');
 const HiringCompanyAdmin = require('../models/HiringCompanyAdmin');
 const HiringEmployee = require('../models/HiringEmployee');
 const HiringOfferLetter = require('../models/HiringOfferLetter');
+const User = require('../models/User');
 const { generateAIResponse } = require('../services/openaiService');
 const { mail } = require('../utils/sendEmail');
 const HiringHoliday = require('../models/HiringHoliday');
@@ -224,6 +225,47 @@ router.post('/employee/signup', async (req, res) => {
     });
   } catch (error) {
     console.error('Hiring Pro employee signup error:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// Customer login for hiring admin access
+router.post('/auth/customer-login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    if (!email || !password) {
+      return res.status(400).json({ message: 'Email and password are required' });
+    }
+
+    const customer = await User.findOne({ email: email.toLowerCase(), role: 'customer' }).select('+password');
+    if (!customer || !customer.password || !(await customer.comparePassword(password))) {
+      return res.status(401).json({ message: 'Invalid credentials' });
+    }
+
+    const company = await HiringCompany.findOne({ customerId: customer._id, onboardingComplete: true });
+    if (!company) {
+      return res.status(400).json({ message: 'Hiring Pro onboarding is not completed for this customer.' });
+    }
+
+    let admin = await HiringCompanyAdmin.findOne({ companyId: company._id });
+    if (!admin) {
+      const tempPassword = crypto.randomBytes(6).toString('hex');
+      admin = await HiringCompanyAdmin.create({
+        companyId: company._id,
+        name: customer.name || 'Company Admin',
+        email: customer.email.toLowerCase(),
+        password: tempPassword
+      });
+    }
+
+    const token = signHiringToken({ role: 'company_admin', companyId: company._id, adminId: admin._id });
+    return res.json({
+      success: true,
+      token,
+      user: { email: customer.email, role: 'company_admin', companyId: company._id, name: customer.name }
+    });
+  } catch (error) {
+    console.error('Hiring Pro customer login error:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 });
