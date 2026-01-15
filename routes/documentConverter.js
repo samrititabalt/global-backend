@@ -1,6 +1,8 @@
 const express = require('express');
 const router = express.Router();
-const { protect, authorizeProAccess } = require('../middleware/auth');
+const auth = require('../middleware/auth');
+const protect = auth.protect;
+const authorizeProAccess = auth.authorizeProAccess;
 const multer = require('multer');
 const pdfParse = require('pdf-parse');
 const { PDFDocument: PDFLib, rgb } = require('pdf-lib');
@@ -21,6 +23,18 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
+
+const safeHandler = (handler) => (
+  typeof handler === 'function'
+    ? handler
+    : (req, res) => res.status(501).json({ error: 'Endpoint not implemented yet.' })
+);
+
+const safeMiddleware = (middleware) => (
+  typeof middleware === 'function'
+    ? middleware
+    : (req, res, next) => res.status(501).json({ error: 'Endpoint not implemented yet.' })
+);
 
 // Configure multer for memory storage
 const storage = multer.memoryStorage();
@@ -254,7 +268,12 @@ const convertPdfToDocxWithPdf2Docx = async (buffer) => {
 // @route   POST /api/document-converter/word-to-pdf
 // @desc    Convert Word document (.doc or .docx) to PDF (preserves formatting)
 // @access  Private (Customer)
-router.post('/word-to-pdf', protect, authorizeProAccess, upload.single('file'), async (req, res) => {
+router.post(
+  '/word-to-pdf',
+  safeMiddleware(protect),
+  safeMiddleware(authorizeProAccess),
+  upload.single('file'),
+  safeHandler(async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ message: 'No file uploaded' });
@@ -341,12 +360,18 @@ router.post('/word-to-pdf', protect, authorizeProAccess, upload.single('file'), 
     console.error('Word to PDF route error:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
   }
-});
+})
+);
 
 // @route   POST /api/document-converter/pdf-to-word
 // @desc    Convert PDF document to Word (.docx) (preserves formatting when possible)
 // @access  Private (Customer)
-router.post('/pdf-to-word', protect, authorizeProAccess, upload.single('file'), async (req, res) => {
+router.post(
+  '/pdf-to-word',
+  safeMiddleware(protect),
+  safeMiddleware(authorizeProAccess),
+  upload.single('file'),
+  safeHandler(async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ message: 'No file uploaded' });
@@ -398,12 +423,18 @@ router.post('/pdf-to-word', protect, authorizeProAccess, upload.single('file'), 
     console.error('PDF to Word route error:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
   }
-});
+})
+);
 
 // @route   POST /api/document-converter/edit-pdf
 // @desc    Edit PDF with annotations (text, highlights, drawings)
 // @access  Private (Customer)
-router.post('/edit-pdf', protect, authorizeProAccess, upload.single('file'), async (req, res) => {
+router.post(
+  '/edit-pdf',
+  safeMiddleware(protect),
+  safeMiddleware(authorizeProAccess),
+  upload.single('file'),
+  safeHandler(async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ message: 'No file uploaded' });
@@ -566,6 +597,7 @@ router.post('/edit-pdf', protect, authorizeProAccess, upload.single('file'), asy
     console.error('Edit PDF route error:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
   }
-});
+})
+);
 
 module.exports = router;
