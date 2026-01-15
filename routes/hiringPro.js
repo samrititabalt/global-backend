@@ -178,6 +178,56 @@ router.get('/customer/company', protect, authorize('customer'), async (req, res)
   }
 });
 
+// Public list of onboarded companies (for employee signup)
+router.get('/companies', async (req, res) => {
+  try {
+    const companies = await HiringCompany.find({ onboardingComplete: true })
+      .select('name');
+    res.json({ success: true, companies });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// Employee signup (profile creation)
+router.post('/employee/signup', async (req, res) => {
+  try {
+    const { name, email, password, companyId } = req.body;
+    if (!name || !email || !password || !companyId) {
+      return res.status(400).json({ message: 'Name, email, password, and company are required' });
+    }
+
+    const company = await HiringCompany.findOne({ _id: companyId, onboardingComplete: true });
+    if (!company) {
+      return res.status(400).json({
+        message: 'Your company has not been onboarded yet. Please ask your employer to set up Hiring Pro before you continue.'
+      });
+    }
+
+    const existing = await HiringEmployee.findOne({ email: email.toLowerCase() });
+    if (existing) {
+      return res.status(400).json({ message: 'Employee already exists. Please log in.' });
+    }
+
+    const employee = await HiringEmployee.create({
+      companyId: company._id,
+      name: name.trim(),
+      email: email.toLowerCase(),
+      password
+    });
+
+    const token = signHiringToken({ role: 'employee', companyId: employee.companyId, employeeId: employee._id });
+    return res.json({
+      success: true,
+      token,
+      user: { email: employee.email, role: employee.role, companyId: employee.companyId, name: employee.name }
+    });
+  } catch (error) {
+    console.error('Hiring Pro employee signup error:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
 // Auth login for company admin/employee/super admin
 router.post('/auth/login', async (req, res) => {
   try {
