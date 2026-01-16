@@ -572,6 +572,29 @@ router.get('/company/offer-letters', requireHiringAuth(['company_admin']), async
   }
 });
 
+router.get('/company/offer-letters/:id/download', requireHiringAuth(['company_admin']), async (req, res) => {
+  try {
+    const offerLetter = await HiringOfferLetter.findOne({
+      _id: req.params.id,
+      companyId: req.hiringUser.companyId
+    });
+    if (!offerLetter || !offerLetter.fileUrl) {
+      return res.status(404).json({ message: 'Offer letter file not found' });
+    }
+
+    const fileResponse = await axios.get(offerLetter.fileUrl, { responseType: 'arraybuffer' });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      `inline; filename="offer-letter-${offerLetter.candidateName || 'document'}.pdf"`
+    );
+    return res.send(fileResponse.data);
+  } catch (error) {
+    console.error('Offer letter download error:', error);
+    return res.status(500).json({ message: 'Unable to load offer letter PDF' });
+  }
+});
+
 router.delete('/company/offer-letters/:id', requireHiringAuth(['company_admin']), async (req, res) => {
   try {
     const offerLetter = await HiringOfferLetter.findOne({
