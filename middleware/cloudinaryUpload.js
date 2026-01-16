@@ -11,7 +11,7 @@ const storage = multer.memoryStorage();
 
 const fileFilter = (req, file, cb) => {
   // Accept images
-  if (file.fieldname === 'image' || file.fieldname === 'avatar') {
+  if (file.fieldname === 'image' || file.fieldname === 'avatar' || file.fieldname === 'logo') {
     if (file.mimetype.startsWith('image/')) {
       cb(null, true);
     } else {
@@ -78,6 +78,27 @@ const uploadToCloudinary = async (req, res, next) => {
           .catch(error => {
             console.error(`Error uploading image ${file.originalname}:`, error);
             throw new Error(`Failed to upload image: ${error.message}`);
+          });
+        uploadPromises.push(uploadPromise);
+      }
+    }
+
+    // Upload company logos
+    if (req.files.logo && req.files.logo.length > 0) {
+      for (const file of req.files.logo) {
+        const uploadPromise = uploadImage(file.buffer, `hiring-pro/logos/${req.user?._id || 'temp'}`, file.mimetype)
+          .then(result => ({
+            type: 'logo',
+            url: result.url,
+            publicId: result.publicId,
+            fileName: file.originalname,
+            size: result.bytes,
+            width: result.width,
+            height: result.height,
+          }))
+          .catch(error => {
+            console.error(`Error uploading logo ${file.originalname}:`, error);
+            throw new Error(`Failed to upload logo: ${error.message}`);
           });
         uploadPromises.push(uploadPromise);
       }

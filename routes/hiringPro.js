@@ -180,21 +180,23 @@ router.post('/onboard', protect, authorize('customer'), upload.fields([{ name: '
     }
 
     const logoFile = req.uploadedFiles?.find(file => file.type === 'logo');
-    const logoUrl = logoFile ? logoFile.url : null;
+    const updatePayload = {
+      name: companyName.trim(),
+      customerId: req.user._id,
+      customerEmail: customerEmail.toLowerCase(),
+      signingAuthority: {
+        name: authorityName.trim(),
+        title: authorityTitle.trim()
+      },
+      onboardingComplete: true
+    };
+    if (logoFile?.url) {
+      updatePayload.logoUrl = logoFile.url;
+    }
 
     const company = await HiringCompany.findOneAndUpdate(
       { customerId: req.user._id },
-      {
-        name: companyName.trim(),
-        customerId: req.user._id,
-        customerEmail: customerEmail.toLowerCase(),
-        logoUrl,
-        signingAuthority: {
-          name: authorityName.trim(),
-          title: authorityTitle.trim()
-        },
-        onboardingComplete: true
-      },
+      updatePayload,
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
 
@@ -511,11 +513,12 @@ router.post('/company/offer-letter', requireHiringAuth(['company_admin']), async
       ctcBreakdown: ctcBreakdown || ''
     }, content);
 
-    const uploadResult = await uploadFile(
-      pdfBuffer,
-      `hiring-pro/offer-letters/${company._id}`,
-      'application/pdf'
-    );
+    const uploadResult = await uploadToCloudinary(pdfBuffer, {
+      folder: `hiring-pro/offer-letters/${company._id}`,
+      resource_type: 'raw',
+      format: 'pdf',
+      public_id: `offer-letter-${Date.now()}`
+    });
 
     const offerLetter = await HiringOfferLetter.create({
       companyId: req.hiringUser.companyId,
@@ -525,8 +528,8 @@ router.post('/company/offer-letter', requireHiringAuth(['company_admin']), async
       salaryPackage,
       ctcBreakdown: ctcBreakdown || '',
       content,
-      fileUrl: uploadResult?.url || null,
-      filePublicId: uploadResult?.publicId || null,
+      fileUrl: uploadResult?.secure_url || null,
+      filePublicId: uploadResult?.public_id || null,
       companyName: company.name || '',
       companyLogoUrl: company.logoUrl || null,
       signingAuthorityName: company.signingAuthority?.name || '',
