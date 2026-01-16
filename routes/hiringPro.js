@@ -535,9 +535,11 @@ router.post('/company/offer-letter', requireHiringAuth(['company_admin']), async
 
     const uploadResult = await uploadRawToCloudinary(pdfBuffer, {
       folder: `hiring-pro/offer-letters/${company._id}`,
-      resource_type: 'raw',
+      resource_type: 'image',
       format: 'pdf',
-      public_id: `offer-letter-${Date.now()}`
+      public_id: `offer-letter-${Date.now()}`,
+      content_type: 'application/pdf',
+      type: 'upload'
     });
 
     const offerLetter = await HiringOfferLetter.create({
@@ -607,7 +609,12 @@ router.delete('/company/offer-letters/:id', requireHiringAuth(['company_admin'])
       try {
         await deleteFromCloudinary(offerLetter.filePublicId, 'raw');
       } catch (error) {
-        console.error('Offer letter Cloudinary delete error:', error);
+        console.error('Offer letter Cloudinary delete error (raw):', error);
+      }
+      try {
+        await deleteFromCloudinary(offerLetter.filePublicId, 'image');
+      } catch (error) {
+        console.error('Offer letter Cloudinary delete error (image):', error);
       }
     }
 
