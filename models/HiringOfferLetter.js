@@ -9,6 +9,12 @@ const HiringOfferLetterSchema = new mongoose.Schema({
   salaryPackage: { type: String, required: true },
   ctcBreakdown: { type: String, default: '' },
   content: { type: String, required: true },
+  fileUrl: { type: String, default: null },
+  filePublicId: { type: String, default: null },
+  companyName: { type: String, default: '' },
+  companyLogoUrl: { type: String, default: null },
+  signingAuthorityName: { type: String, default: '' },
+  signingAuthorityTitle: { type: String, default: '' },
   status: { type: String, default: 'draft' },
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'HiringCompanyAdmin', required: true }
 }, { timestamps: true });

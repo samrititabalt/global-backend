@@ -52,3 +52,13 @@ exports.authorize = (...roles) => {
   };
 };
 
+// Allow customers, or agents with global pro access enabled
+exports.authorizeProAccess = (req, res, next) => {
+  const isOwnerEmail = req.user && req.user.email && req.user.email.toLowerCase() === 'spbajaj25@gmail.com';
+  if (req.user.role === 'customer' || (req.user.role === 'agent' && req.user.pro_access_enabled) || isOwnerEmail) {
+    return next();
+  }
+  return res.status(403).json({
+    message: 'Access restricted. Please contact admin.'
+  });
+};

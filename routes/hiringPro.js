@@ -3,7 +3,10 @@ const router = express.Router();
 const jwt = require('jsonwebtoken');
 const mongoose = require('mongoose');
 const crypto = require('crypto');
+const axios = require('axios');
+const PDFDocument = require('pdfkit');
 const { upload, uploadToCloudinary } = require('../middleware/cloudinaryUpload');
+const { uploadFile, deleteFromCloudinary } = require('../services/cloudinary');
 const { protect, authorize } = require('../middleware/auth');
 const HiringCompany = require('../models/HiringCompany');
 const HiringCompanyAdmin = require('../models/HiringCompanyAdmin');
@@ -47,6 +50,59 @@ const requireHiringAuth = (roles = []) => (req, res, next) => {
   } catch (error) {
     return res.status(401).json({ message: 'Not authorized' });
   }
+};
+
+const buildOfferLetterPdfBuffer = async (company, offer, content) => {
+  const doc = new PDFDocument({ size: 'A4', margin: 50 });
+  const chunks = [];
+  doc.on('data', (chunk) => chunks.push(chunk));
+
+  if (company?.logoUrl) {
+    try {
+      const logoResponse = await axios.get(company.logoUrl, { responseType: 'arraybuffer' });
+      doc.image(logoResponse.data, { width: 120 });
+      doc.moveDown();
+    } catch (error) {
+      console.warn('Unable to load company logo for offer letter:', error.message);
+    }
+  }
+
+  if (company?.name) {
+    doc.fontSize(18).text(company.name);
+    doc.moveDown(0.5);
+  }
+
+  doc.fontSize(14).text('Offer Letter', { underline: true });
+  doc.moveDown();
+  doc.fontSize(12).text(`Candidate: ${offer.candidateName}`);
+  doc.text(`Role: ${offer.roleTitle}`);
+  doc.text(`Start Date: ${offer.startDate}`);
+  doc.text(`Salary Package: ${offer.salaryPackage}`);
+  if (offer.ctcBreakdown) {
+    doc.moveDown(0.5);
+    doc.text(`CTC Breakdown: ${offer.ctcBreakdown}`);
+  }
+  doc.moveDown();
+
+  const lines = (content || '').split(/\r?\n/);
+  lines.forEach((line) => {
+    if (!line.trim()) {
+      doc.moveDown();
+      return;
+    }
+    doc.text(line);
+  });
+
+  doc.moveDown();
+  doc.text('Signing Authority', { underline: true });
+  doc.text(company?.signingAuthority?.name || '');
+  doc.text(company?.signingAuthority?.title || '');
+
+  return new Promise((resolve, reject) => {
+    doc.on('end', () => resolve(Buffer.concat(chunks)));
+    doc.on('error', reject);
+    doc.end();
+  });
 };
 
 const ensureSeedCompanies = async () => {
@@ -444,6 +500,23 @@ router.post('/company/offer-letter', requireHiringAuth(['company_admin']), async
     if (!candidateName || !roleTitle || !startDate || !salaryPackage || !content) {
       return res.status(400).json({ message: 'Missing required fields' });
     }
+    const company = await HiringCompany.findById(req.hiringUser.companyId);
+    if (!company) return res.status(404).json({ message: 'Company not found' });
+
+    const pdfBuffer = await buildOfferLetterPdfBuffer(company, {
+      candidateName,
+      roleTitle,
+      startDate,
+      salaryPackage,
+      ctcBreakdown: ctcBreakdown || ''
+    }, content);
+
+    const uploadResult = await uploadFile(
+      pdfBuffer,
+      `hiring-pro/offer-letters/${company._id}`,
+      'application/pdf'
+    );
+
     const offerLetter = await HiringOfferLetter.create({
       companyId: req.hiringUser.companyId,
       candidateName,
@@ -452,10 +525,17 @@ router.post('/company/offer-letter', requireHiringAuth(['company_admin']), async
       salaryPackage,
       ctcBreakdown: ctcBreakdown || '',
       content,
+      fileUrl: uploadResult?.url || null,
+      filePublicId: uploadResult?.publicId || null,
+      companyName: company.name || '',
+      companyLogoUrl: company.logoUrl || null,
+      signingAuthorityName: company.signingAuthority?.name || '',
+      signingAuthorityTitle: company.signingAuthority?.title || '',
       createdBy: req.hiringUser.adminId
     });
     res.json({ success: true, offerLetter });
   } catch (error) {
+    console.error('Offer letter save error:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 });
@@ -464,6 +544,29 @@ router.get('/company/offer-letters', requireHiringAuth(['company_admin']), async
   try {
     const offerLetters = await HiringOfferLetter.find({ companyId: req.hiringUser.companyId }).sort({ createdAt: -1 });
     res.json({ success: true, offerLetters });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+router.delete('/company/offer-letters/:id', requireHiringAuth(['company_admin']), async (req, res) => {
+  try {
+    const offerLetter = await HiringOfferLetter.findOne({
+      _id: req.params.id,
+      companyId: req.hiringUser.companyId
+    });
+    if (!offerLetter) return res.status(404).json({ message: 'Offer letter not found' });
+
+    if (offerLetter.filePublicId) {
+      try {
+        await deleteFromCloudinary(offerLetter.filePublicId, 'raw');
+      } catch (error) {
+        console.error('Offer letter Cloudinary delete error:', error);
+      }
+    }
+
+    await offerLetter.deleteOne();
+    res.json({ success: true });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
   }
