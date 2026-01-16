@@ -6,7 +6,7 @@ const crypto = require('crypto');
 const axios = require('axios');
 const PDFDocument = require('pdfkit');
 const { upload, uploadToCloudinary } = require('../middleware/cloudinaryUpload');
-const { uploadFile, deleteFromCloudinary } = require('../services/cloudinary');
+const { uploadToCloudinary: uploadRawToCloudinary, deleteFromCloudinary } = require('../services/cloudinary');
 const { protect, authorize } = require('../middleware/auth');
 const HiringCompany = require('../models/HiringCompany');
 const HiringCompanyAdmin = require('../models/HiringCompanyAdmin');
@@ -52,6 +52,19 @@ const requireHiringAuth = (roles = []) => (req, res, next) => {
   }
 };
 
+const sanitizeOfferContent = (content = '') => {
+  return content
+    .split(/\r?\n/)
+    .filter((line) => {
+      const trimmed = line.trim();
+      if (!trimmed) return true;
+      if (/\[[^\]]+\]/.test(trimmed)) return false;
+      return true;
+    })
+    .join('\n')
+    .trim();
+};
+
 const buildOfferLetterPdfBuffer = async (company, offer, content) => {
   const doc = new PDFDocument({ size: 'A4', margin: 50 });
   const chunks = [];
@@ -74,9 +87,11 @@ const buildOfferLetterPdfBuffer = async (company, offer, content) => {
 
   doc.fontSize(14).text('Offer Letter', { underline: true });
   doc.moveDown();
+  if (offer.startDate) {
+    doc.fontSize(12).text(`Date: ${offer.startDate}`);
+  }
   doc.fontSize(12).text(`Candidate: ${offer.candidateName}`);
   doc.text(`Role: ${offer.roleTitle}`);
-  doc.text(`Start Date: ${offer.startDate}`);
   doc.text(`Salary Package: ${offer.salaryPackage}`);
   if (offer.ctcBreakdown) {
     doc.moveDown(0.5);
@@ -84,7 +99,7 @@ const buildOfferLetterPdfBuffer = async (company, offer, content) => {
   }
   doc.moveDown();
 
-  const lines = (content || '').split(/\r?\n/);
+  const lines = sanitizeOfferContent(content || '').split(/\r?\n/);
   lines.forEach((line) => {
     if (!line.trim()) {
       doc.moveDown();
@@ -95,8 +110,10 @@ const buildOfferLetterPdfBuffer = async (company, offer, content) => {
 
   doc.moveDown();
   doc.text('Signing Authority', { underline: true });
-  doc.text(company?.signingAuthority?.name || '');
-  doc.text(company?.signingAuthority?.title || '');
+  doc.font('Helvetica-Oblique').text(company?.signingAuthority?.name || '');
+  doc.font('Helvetica').text(company?.signingAuthority?.title || '');
+  doc.moveDown(0.5);
+  doc.font('Helvetica-Oblique').text(`Digitally signed by ${company?.signingAuthority?.name || ''}`);
 
   return new Promise((resolve, reject) => {
     doc.on('end', () => resolve(Buffer.concat(chunks)));
@@ -489,7 +506,8 @@ Requirements:
 Return plain text with clear headings.`;
 
     const content = await generateAIResponse(prompt, [], 'hiring');
-    res.json({ success: true, content });
+    const sanitized = sanitizeOfferContent(content || '');
+    res.json({ success: true, content: sanitized });
   } catch (error) {
     console.error('Offer letter generation error:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
@@ -505,15 +523,17 @@ router.post('/company/offer-letter', requireHiringAuth(['company_admin']), async
     const company = await HiringCompany.findById(req.hiringUser.companyId);
     if (!company) return res.status(404).json({ message: 'Company not found' });
 
+    const sanitizedContent = sanitizeOfferContent(content || '');
+
     const pdfBuffer = await buildOfferLetterPdfBuffer(company, {
       candidateName,
       roleTitle,
       startDate,
       salaryPackage,
       ctcBreakdown: ctcBreakdown || ''
-    }, content);
+    }, sanitizedContent);
 
-    const uploadResult = await uploadToCloudinary(pdfBuffer, {
+    const uploadResult = await uploadRawToCloudinary(pdfBuffer, {
       folder: `hiring-pro/offer-letters/${company._id}`,
       resource_type: 'raw',
       format: 'pdf',
@@ -527,7 +547,7 @@ router.post('/company/offer-letter', requireHiringAuth(['company_admin']), async
       startDate,
       salaryPackage,
       ctcBreakdown: ctcBreakdown || '',
-      content,
+      content: sanitizedContent,
       fileUrl: uploadResult?.secure_url || null,
       filePublicId: uploadResult?.public_id || null,
       companyName: company.name || '',
