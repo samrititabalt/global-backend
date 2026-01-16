@@ -31,15 +31,11 @@ router.get('/accounts', async (req, res) => {
 
 /**
  * POST /api/linkedin-helper/accounts
- * Create/connect a LinkedIn account
+ * Create/connect a LinkedIn account (Extension-based, no cookies needed)
  */
 router.post('/accounts', async (req, res) => {
   try {
-    const { liAt, JSESSIONID, proxy, consentAccepted } = req.body;
-
-    if (!liAt || !JSESSIONID) {
-      return res.status(400).json({ message: 'li_at and JSESSIONID cookies are required' });
-    }
+    const { extensionId, proxy, consentAccepted } = req.body;
 
     if (!consentAccepted) {
       return res.status(400).json({ message: 'You must accept the terms and risks' });
@@ -50,26 +46,49 @@ router.post('/accounts', async (req, res) => {
 
     if (account) {
       // Update existing account
-      account.setCookies(liAt, JSESSIONID);
       if (proxy) account.proxy = proxy;
+      if (extensionId) account.extensionId = extensionId;
       account.consentAccepted = true;
       account.consentAcceptedAt = new Date();
       account.status = 'active';
+      account.connectionMethod = 'extension';
       await account.save();
     } else {
-      // Create new account
+      // Create new account (extension-based, no cookies stored)
       account = new LinkedInAccount({
         userId: req.user._id,
+        extensionId: extensionId || null,
         proxy: proxy || null,
         consentAccepted: true,
         consentAcceptedAt: new Date(),
-        connectedAt: new Date()
+        connectedAt: new Date(),
+        connectionMethod: 'extension'
       });
-      account.setCookies(liAt, JSESSIONID);
+      // For extension method, we don't store cookies
+      // Extension handles authentication directly
       await account.save();
     }
 
     res.json({ success: true, account: account.toObject() });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+/**
+ * GET /api/linkedin-helper/accounts/current
+ * Get current user's account
+ */
+router.get('/accounts/current', async (req, res) => {
+  try {
+    const account = await LinkedInAccount.findOne({ userId: req.user._id })
+      .select('-encryptedLiAt -encryptedJSESSIONID');
+
+    if (!account) {
+      return res.status(404).json({ message: 'No account found' });
+    }
+
+    res.json({ success: true, account });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
   }
@@ -213,7 +232,7 @@ router.get('/accounts/:id/inbox', async (req, res) => {
 
 /**
  * POST /api/linkedin-helper/accounts/:id/inbox/sync
- * Trigger inbox sync
+ * Trigger inbox sync (for extension-based accounts, extension handles sync)
  */
 router.post('/accounts/:id/inbox/sync', async (req, res) => {
   try {
@@ -226,8 +245,68 @@ router.post('/accounts/:id/inbox/sync', async (req, res) => {
       return res.status(404).json({ message: 'Account not found' });
     }
 
-    const result = await addInboxSyncTask(account._id);
-    res.json({ success: true, ...result });
+    // For extension-based accounts, sync is handled by extension
+    // This endpoint just acknowledges the sync request
+    if (account.connectionMethod === 'extension') {
+      res.json({ 
+        success: true, 
+        message: 'Sync request sent to extension',
+        method: 'extension'
+      });
+    } else {
+      // For cookie-based accounts, use background workers
+      const result = await addInboxSyncTask(account._id);
+      res.json({ success: true, ...result });
+    }
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+/**
+ * POST /api/linkedin-helper/accounts/current/inbox/sync
+ * Sync inbox data from extension
+ */
+router.post('/accounts/current/inbox/sync', async (req, res) => {
+  try {
+    const { conversations } = req.body;
+    
+    const account = await LinkedInAccount.findOne({ userId: req.user._id });
+    if (!account) {
+      return res.status(404).json({ message: 'Account not found' });
+    }
+
+    // Save conversations to database
+    const savedMessages = [];
+    for (const conv of conversations || []) {
+      const message = await LinkedInMessage.findOneAndUpdate(
+        { 
+          accountId: account._id, 
+          conversationId: conv.conversationId,
+          messageId: conv.messageId || `ext_${conv.conversationId}_${Date.now()}`
+        },
+        {
+          accountId: account._id,
+          conversationId: conv.conversationId,
+          senderName: conv.senderName,
+          messageText: conv.lastMessage,
+          messageId: conv.messageId || `ext_${conv.conversationId}_${Date.now()}`,
+          timestamp: new Date(conv.timestamp),
+          isRead: false
+        },
+        { upsert: true, new: true }
+      );
+      savedMessages.push(message);
+    }
+
+    account.lastSyncAt = new Date();
+    await account.save();
+
+    res.json({ 
+      success: true, 
+      messagesSaved: savedMessages.length,
+      conversations: savedMessages.length 
+    });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
   }

@@ -551,4 +551,29 @@ router.get('/shared-chart/:shareId', async (req, res) => {
   }
 });
 
+// @route   GET /api/public/linkedin-helper-extension
+// @desc    Download LinkedIn Helper extension
+// @access  Public
+router.get('/linkedin-helper-extension', (req, res) => {
+  try {
+    const extensionPath = path.join(__dirname, '../../frontend/public/linkedin-helper-extension');
+    
+    // Check if extension directory exists
+    if (!fs.existsSync(extensionPath)) {
+      return res.status(404).json({ message: 'Extension not found' });
+    }
+
+    // For now, redirect to the extension folder or provide instructions
+    // In production, you'd want to create a zip file
+    res.json({
+      success: true,
+      message: 'Extension files available',
+      downloadUrl: '/linkedin-helper-extension',
+      instructions: 'Download the extension folder and load it as an unpacked extension in Chrome/Edge'
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
 module.exports = router;

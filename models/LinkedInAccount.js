@@ -8,14 +8,22 @@ const LinkedInAccountSchema = new mongoose.Schema({
     required: true,
     index: true
   },
-  // Encrypted cookies
+  // Connection method
+  connectionMethod: {
+    type: String,
+    enum: ['cookies', 'extension'],
+    default: 'extension'
+  },
+  // Extension ID (for extension-based connection)
+  extensionId: String,
+  // Encrypted cookies (only for cookie-based connection)
   encryptedLiAt: {
     type: String,
-    required: true
+    required: function() { return this.connectionMethod === 'cookies'; }
   },
   encryptedJSESSIONID: {
     type: String,
-    required: true
+    required: function() { return this.connectionMethod === 'cookies'; }
   },
   // Proxy settings (optional)
   proxy: {
@@ -107,6 +115,9 @@ function decrypt(encryptedData) {
 
 // Instance methods
 LinkedInAccountSchema.methods.getCookies = function() {
+  if (this.connectionMethod === 'extension') {
+    return null; // Extension handles auth, no cookies stored
+  }
   return {
     li_at: decrypt(this.encryptedLiAt),
     JSESSIONID: decrypt(this.encryptedJSESSIONID)
@@ -114,8 +125,11 @@ LinkedInAccountSchema.methods.getCookies = function() {
 };
 
 LinkedInAccountSchema.methods.setCookies = function(liAt, jSessionId) {
-  this.encryptedLiAt = encrypt(liAt);
-  this.encryptedJSESSIONID = encrypt(jSessionId);
+  if (liAt && jSessionId) {
+    this.encryptedLiAt = encrypt(liAt);
+    this.encryptedJSESSIONID = encrypt(jSessionId);
+    this.connectionMethod = 'cookies';
+  }
 };
 
 LinkedInAccountSchema.methods.resetDailyStats = function() {
