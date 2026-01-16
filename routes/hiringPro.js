@@ -6,7 +6,11 @@ const crypto = require('crypto');
 const axios = require('axios');
 const PDFDocument = require('pdfkit');
 const { upload, uploadToCloudinary } = require('../middleware/cloudinaryUpload');
-const { uploadToCloudinary: uploadRawToCloudinary, deleteFromCloudinary } = require('../services/cloudinary');
+const {
+  uploadToCloudinary: uploadRawToCloudinary,
+  deleteFromCloudinary,
+  getSignedDownloadUrl,
+} = require('../services/cloudinary');
 const { protect, authorize } = require('../middleware/auth');
 const HiringCompany = require('../models/HiringCompany');
 const HiringCompanyAdmin = require('../models/HiringCompanyAdmin');
@@ -584,7 +588,11 @@ router.get('/company/offer-letters/:id/download', requireHiringAuth(['company_ad
       return res.status(404).json({ message: 'Offer letter file not found' });
     }
 
-    const fileResponse = await axios.get(offerLetter.fileUrl, { responseType: 'arraybuffer' });
+    const signedUrl = offerLetter.filePublicId
+      ? getSignedDownloadUrl(offerLetter.filePublicId, 'pdf', { resource_type: 'image', type: 'upload' })
+      : offerLetter.fileUrl;
+
+    const fileResponse = await axios.get(signedUrl, { responseType: 'arraybuffer' });
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader(
       'Content-Disposition',

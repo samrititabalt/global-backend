@@ -244,6 +244,31 @@ const deleteFromCloudinary = async (publicId, resourceType = 'image') => {
   }
 };
 
+/**
+ * Get a signed delivery URL for Cloudinary assets
+ * @param {String} publicId - Public ID of the asset
+ * @param {Object} options - Cloudinary delivery options
+ * @returns {String} Signed URL
+ */
+const getSignedUrl = (publicId, options = {}) => {
+  return cloudinary.url(publicId, {
+    secure: true,
+    sign_url: true,
+    ...options,
+  });
+};
+
+/**
+ * Get a signed download URL for Cloudinary assets
+ * @param {String} publicId - Public ID of the asset
+ * @param {String} format - File format (e.g., pdf)
+ * @param {Object} options - Cloudinary delivery options
+ * @returns {String} Signed download URL
+ */
+const getSignedDownloadUrl = (publicId, format, options = {}) => {
+  return cloudinary.utils.private_download_url(publicId, format, options);
+};
+
 module.exports = {
   uploadImage,
   uploadAudio,
@@ -251,4 +276,6 @@ module.exports = {
   uploadVideo,
   uploadToCloudinary,
   deleteFromCloudinary,
+  getSignedUrl,
+  getSignedDownloadUrl,
 };
