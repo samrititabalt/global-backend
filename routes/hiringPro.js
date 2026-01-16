@@ -59,7 +59,42 @@ const requireHiringAuth = (roles = []) => (req, res, next) => {
 };
 
 const sanitizeOfferContent = (content = '') => {
-  return content
+  // If content is HTML (from WYSIWYG editor), convert to plain text first
+  let plainText = content;
+  if (content.includes('<') && content.includes('>')) {
+    // Convert HTML to plain text
+    plainText = content
+      .replace(/<h[1-6][^>]*>/gi, '\n') // Headings become new lines
+      .replace(/<\/h[1-6]>/gi, '\n')
+      .replace(/<p[^>]*>/gi, '') // Remove paragraph tags
+      .replace(/<\/p>/gi, '\n')
+      .replace(/<br\s*\/?>/gi, '\n') // Line breaks
+      .replace(/<strong[^>]*>/gi, '**') // Bold tags to **
+      .replace(/<\/strong>/gi, '**')
+      .replace(/<b[^>]*>/gi, '**')
+      .replace(/<\/b>/gi, '**')
+      .replace(/<em[^>]*>/gi, '*') // Italic tags to *
+      .replace(/<\/em>/gi, '*')
+      .replace(/<i[^>]*>/gi, '*')
+      .replace(/<\/i>/gi, '*')
+      .replace(/<u[^>]*>/gi, '') // Remove underline tags
+      .replace(/<\/u>/gi, '')
+      .replace(/<ul[^>]*>/gi, '\n') // Lists
+      .replace(/<\/ul>/gi, '\n')
+      .replace(/<ol[^>]*>/gi, '\n')
+      .replace(/<\/ol>/gi, '\n')
+      .replace(/<li[^>]*>/gi, '• ')
+      .replace(/<\/li>/gi, '\n')
+      .replace(/<[^>]+>/g, '') // Remove all remaining HTML tags
+      .replace(/&nbsp;/g, ' ')
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'");
+  }
+  
+  return plainText
     .split(/\r?\n/)
     .filter((line) => {
       const trimmed = line.trim();
