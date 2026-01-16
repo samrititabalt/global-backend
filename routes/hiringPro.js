@@ -5,6 +5,8 @@ const mongoose = require('mongoose');
 const crypto = require('crypto');
 const axios = require('axios');
 const PDFDocument = require('pdfkit');
+const path = require('path');
+const fs = require('fs');
 const { upload, uploadToCloudinary } = require('../middleware/cloudinaryUpload');
 const {
   uploadToCloudinary: uploadRawToCloudinary,
@@ -66,58 +68,178 @@ const sanitizeOfferContent = (content = '') => {
       return true;
     })
     .join('\n')
-    .trim();
+    .trim()
+    // Remove markdown formatting
+    .replace(/\*\*/g, '') // Remove bold markers
+    .replace(/\*/g, '') // Remove italic markers
+    .replace(/#{1,6}\s/g, '') // Remove heading markers
+    .replace(/\[([^\]]+)\]\([^\)]+\)/g, '$1') // Convert links to plain text
+    .replace(/`([^`]+)`/g, '$1'); // Remove code markers
 };
 
 const buildOfferLetterPdfBuffer = async (company, offer, content) => {
-  const doc = new PDFDocument({ size: 'A4', margin: 50 });
+  const doc = new PDFDocument({ 
+    size: 'A4', 
+    margin: 60,
+    info: {
+      Title: `Offer Letter - ${offer.candidateName}`,
+      Author: company?.name || 'Tabalt Ltd',
+      Subject: 'Employment Offer Letter'
+    }
+  });
   const chunks = [];
   doc.on('data', (chunk) => chunks.push(chunk));
 
+  // Header Section
   if (company?.logoUrl) {
     try {
       const logoResponse = await axios.get(company.logoUrl, { responseType: 'arraybuffer' });
-      doc.image(logoResponse.data, { width: 120 });
-      doc.moveDown();
+      doc.image(logoResponse.data, { width: 100, align: 'left' });
+      doc.moveDown(0.5);
     } catch (error) {
       console.warn('Unable to load company logo for offer letter:', error.message);
     }
   }
 
+  // Company Name
   if (company?.name) {
-    doc.fontSize(18).text(company.name);
-    doc.moveDown(0.5);
+    doc.fontSize(20)
+       .font('Helvetica-Bold')
+       .fillColor('#1a1a1a')
+       .text(company.name, { align: 'left' });
+    doc.moveDown(0.3);
   }
 
-  doc.fontSize(14).text('Offer Letter', { underline: true });
-  doc.moveDown();
+  // Title
+  doc.fontSize(16)
+     .font('Helvetica-Bold')
+     .fillColor('#2c3e50')
+     .text('Offer Letter', { align: 'left' });
+  doc.moveDown(1);
+
+  // Offer Details Section
+  doc.fontSize(11)
+     .font('Helvetica')
+     .fillColor('#333333');
+  
   if (offer.startDate) {
-    doc.fontSize(12).text(`Date: ${offer.startDate}`);
+    doc.text(`Date: ${offer.startDate}`, { align: 'left' });
   }
-  doc.fontSize(12).text(`Candidate: ${offer.candidateName}`);
-  doc.text(`Role: ${offer.roleTitle}`);
-  doc.text(`Salary Package: ${offer.salaryPackage}`);
+  doc.text(`Candidate: ${offer.candidateName}`, { align: 'left' });
+  doc.text(`Role: ${offer.roleTitle}`, { align: 'left' });
+  doc.text(`Salary Package: ${offer.salaryPackage}`, { align: 'left' });
+  
   if (offer.ctcBreakdown) {
     doc.moveDown(0.5);
-    doc.text(`CTC Breakdown: ${offer.ctcBreakdown}`);
+    doc.text(`CTC Breakdown: ${offer.ctcBreakdown}`, { align: 'left' });
   }
-  doc.moveDown();
+  
+  doc.moveDown(1.5);
 
+  // Main Content
   const lines = sanitizeOfferContent(content || '').split(/\r?\n/);
+  let isFirstLine = true;
+  
   lines.forEach((line) => {
-    if (!line.trim()) {
-      doc.moveDown();
+    const trimmed = line.trim();
+    if (!trimmed) {
+      doc.moveDown(0.5);
       return;
     }
-    doc.text(line);
+    
+    // Check if line is a heading (all caps or starts with capital and ends with colon)
+    const isHeading = /^[A-Z][A-Z\s]+:?$/.test(trimmed) || /^[A-Z][^a-z]*$/.test(trimmed);
+    
+    if (isHeading && trimmed.length < 50) {
+      doc.fontSize(12)
+         .font('Helvetica-Bold')
+         .fillColor('#2c3e50')
+         .text(trimmed.replace(/:/g, ''), { align: 'left' });
+      doc.moveDown(0.3);
+    } else {
+      doc.fontSize(11)
+         .font('Helvetica')
+         .fillColor('#333333')
+         .text(trimmed, { 
+           align: 'left',
+           lineGap: 2,
+           paragraphGap: 5
+         });
+    }
   });
 
-  doc.moveDown();
-  doc.text('Signing Authority', { underline: true });
-  doc.font('Helvetica-Oblique').text(company?.signingAuthority?.name || '');
-  doc.font('Helvetica').text(company?.signingAuthority?.title || '');
+  doc.moveDown(2);
+
+  // Signature Section
+  doc.fontSize(11)
+     .font('Helvetica-Bold')
+     .fillColor('#2c3e50')
+     .text('Signing Authority', { align: 'left' });
+  doc.moveDown(0.8);
+
+  // Try to load signature image
+  let signatureLoaded = false;
+  
+  // Try multiple paths for signature
+  const signaturePaths = [
+    path.join(__dirname, '../../frontend/public/assets/signature.png'),
+    path.join(process.cwd(), 'frontend/public/assets/signature.png'),
+    path.join(process.cwd(), 'public/assets/signature.png'),
+    path.join(__dirname, '../uploads/signature.png')
+  ];
+  
+  // Also check for signature URL in environment or company settings
+  const signatureUrl = process.env.SIGNATURE_IMAGE_URL || company?.signatureUrl;
+  
+  try {
+    // First try URL if available
+    if (signatureUrl) {
+      try {
+        const signatureResponse = await axios.get(signatureUrl, { responseType: 'arraybuffer' });
+        doc.image(signatureResponse.data, {
+          width: 120,
+          align: 'left'
+        });
+        doc.moveDown(0.3);
+        signatureLoaded = true;
+      } catch (urlError) {
+        console.warn('Unable to load signature from URL:', urlError.message);
+      }
+    }
+    
+    // If URL didn't work, try local file paths
+    if (!signatureLoaded) {
+      for (const signaturePath of signaturePaths) {
+        if (fs.existsSync(signaturePath)) {
+          doc.image(signaturePath, {
+            width: 120,
+            align: 'left'
+          });
+          doc.moveDown(0.3);
+          signatureLoaded = true;
+          break;
+        }
+      }
+    }
+  } catch (error) {
+    console.warn('Signature image not found, using text only:', error.message);
+  }
+
+  // Signing Authority Details
+  doc.fontSize(11)
+     .font('Helvetica')
+     .fillColor('#333333')
+     .text(company?.signingAuthority?.name || '', { align: 'left' });
+  doc.moveDown(0.2);
+  doc.fontSize(10)
+     .font('Helvetica')
+     .fillColor('#666666')
+     .text(company?.signingAuthority?.title || '', { align: 'left' });
   doc.moveDown(0.5);
-  doc.font('Helvetica-Oblique').text(`Digitally signed by ${company?.signingAuthority?.name || ''}`);
+  doc.fontSize(9)
+     .font('Helvetica-Oblique')
+     .fillColor('#888888')
+     .text(`Digitally signed by ${company?.signingAuthority?.name || ''}`, { align: 'left' });
 
   return new Promise((resolve, reject) => {
     doc.on('end', () => resolve(Buffer.concat(chunks)));
