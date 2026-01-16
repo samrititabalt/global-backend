@@ -60,12 +60,17 @@ const uploadToCloudinary = async (req, res, next) => {
   }
 
   try {
+    const uploadOwnerId = req.user?._id
+      || req.hiringUser?.employeeId
+      || req.hiringUser?.adminId
+      || req.hiringUser?.companyId
+      || 'temp';
     const uploadPromises = [];
 
     // Upload images
     if (req.files.image && req.files.image.length > 0) {
       for (const file of req.files.image) {
-        const uploadPromise = uploadImage(file.buffer, `chat-media/images/${req.user?._id || 'temp'}`, file.mimetype)
+        const uploadPromise = uploadImage(file.buffer, `chat-media/images/${uploadOwnerId}`, file.mimetype)
           .then(result => ({
             type: 'image',
             url: result.url,
@@ -86,7 +91,7 @@ const uploadToCloudinary = async (req, res, next) => {
     // Upload company logos
     if (req.files.logo && req.files.logo.length > 0) {
       for (const file of req.files.logo) {
-        const uploadPromise = uploadImage(file.buffer, `hiring-pro/logos/${req.user?._id || 'temp'}`, file.mimetype)
+        const uploadPromise = uploadImage(file.buffer, `hiring-pro/logos/${uploadOwnerId}`, file.mimetype)
           .then(result => ({
             type: 'logo',
             url: result.url,
@@ -107,7 +112,10 @@ const uploadToCloudinary = async (req, res, next) => {
     // Upload avatar
     if (req.files.avatar && req.files.avatar.length > 0) {
       for (const file of req.files.avatar) {
-        const uploadPromise = uploadImage(file.buffer, `avatars/${req.user?._id || 'temp'}`, file.mimetype)
+        const avatarFolder = req.hiringUser?.employeeId
+          ? `hiring-pro/employee-avatars/${req.hiringUser.employeeId}`
+          : `avatars/${uploadOwnerId}`;
+        const uploadPromise = uploadImage(file.buffer, avatarFolder, file.mimetype)
           .then(result => ({
             type: 'avatar',
             url: result.url,
@@ -128,7 +136,7 @@ const uploadToCloudinary = async (req, res, next) => {
     // Upload audio files
     if (req.files.audio && req.files.audio.length > 0) {
       for (const file of req.files.audio) {
-        const uploadPromise = uploadAudio(file.buffer, `chat-media/audio/${req.user._id}`, file.mimetype)
+        const uploadPromise = uploadAudio(file.buffer, `chat-media/audio/${uploadOwnerId}`, file.mimetype)
           .then(result => ({
             type: 'audio',
             url: result.url,
@@ -148,7 +156,7 @@ const uploadToCloudinary = async (req, res, next) => {
     // Upload files
     if (req.files.file && req.files.file.length > 0) {
       for (const file of req.files.file) {
-        const uploadPromise = uploadFile(file.buffer, `chat-media/files/${req.user._id}`, file.mimetype)
+        const uploadPromise = uploadFile(file.buffer, `chat-media/files/${uploadOwnerId}`, file.mimetype)
           .then(result => ({
             type: 'file',
             url: result.url,
