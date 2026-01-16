@@ -69,18 +69,18 @@ const sanitizeOfferContent = (content = '') => {
     })
     .join('\n')
     .trim()
-    // Remove markdown formatting
-    .replace(/\*\*/g, '') // Remove bold markers
-    .replace(/\*/g, '') // Remove italic markers
+    // Remove unwanted markdown formatting but preserve ** for intentional bold
     .replace(/#{1,6}\s/g, '') // Remove heading markers
     .replace(/\[([^\]]+)\]\([^\)]+\)/g, '$1') // Convert links to plain text
-    .replace(/`([^`]+)`/g, '$1'); // Remove code markers
+    .replace(/`([^`]+)`/g, '$1') // Remove code markers
+    // Keep ** markers for bold text (they'll be processed in PDF generation)
+    .replace(/\*(?!\*)/g, ''); // Remove single * (italics) but keep **
 };
 
 const buildOfferLetterPdfBuffer = async (company, offer, content) => {
   const doc = new PDFDocument({ 
     size: 'A4', 
-    margin: 60,
+    margin: 50, // Reduced margins to fit more content
     info: {
       Title: `Offer Letter - ${offer.candidateName}`,
       Author: company?.name || 'Tabalt Ltd',
@@ -90,12 +90,12 @@ const buildOfferLetterPdfBuffer = async (company, offer, content) => {
   const chunks = [];
   doc.on('data', (chunk) => chunks.push(chunk));
 
-  // Header Section
+  // Compact Header Section
   if (company?.logoUrl) {
     try {
       const logoResponse = await axios.get(company.logoUrl, { responseType: 'arraybuffer' });
-      doc.image(logoResponse.data, { width: 100, align: 'left' });
-      doc.moveDown(0.5);
+      doc.image(logoResponse.data, { width: 80, align: 'left' });
+      doc.moveDown(0.3);
     } catch (error) {
       console.warn('Unable to load company logo for offer letter:', error.message);
     }
@@ -103,22 +103,22 @@ const buildOfferLetterPdfBuffer = async (company, offer, content) => {
 
   // Company Name
   if (company?.name) {
-    doc.fontSize(20)
+    doc.fontSize(18)
        .font('Helvetica-Bold')
        .fillColor('#1a1a1a')
        .text(company.name, { align: 'left' });
-    doc.moveDown(0.3);
+    doc.moveDown(0.2);
   }
 
   // Title
-  doc.fontSize(16)
+  doc.fontSize(14)
      .font('Helvetica-Bold')
      .fillColor('#2c3e50')
      .text('Offer Letter', { align: 'left' });
-  doc.moveDown(1);
+  doc.moveDown(0.8);
 
-  // Offer Details Section
-  doc.fontSize(11)
+  // Offer Details Section - Compact
+  doc.fontSize(10)
      .font('Helvetica')
      .fillColor('#333333');
   
@@ -130,52 +130,134 @@ const buildOfferLetterPdfBuffer = async (company, offer, content) => {
   doc.text(`Salary Package: ${offer.salaryPackage}`, { align: 'left' });
   
   if (offer.ctcBreakdown) {
-    doc.moveDown(0.5);
-    doc.text(`CTC Breakdown: ${offer.ctcBreakdown}`, { align: 'left' });
+    doc.moveDown(0.3);
+    doc.font('Helvetica-Bold').text('CTC Breakdown:', { continued: true });
+    doc.font('Helvetica').text(` ${offer.ctcBreakdown}`);
   }
   
-  doc.moveDown(1.5);
+  doc.moveDown(1);
 
-  // Main Content
+  // Main Content - Optimized for single page
   const lines = sanitizeOfferContent(content || '').split(/\r?\n/);
-  let isFirstLine = true;
   
   lines.forEach((line) => {
     const trimmed = line.trim();
     if (!trimmed) {
-      doc.moveDown(0.5);
+      doc.moveDown(0.3);
       return;
     }
     
-    // Check if line is a heading (all caps or starts with capital and ends with colon)
-    const isHeading = /^[A-Z][A-Z\s]+:?$/.test(trimmed) || /^[A-Z][^a-z]*$/.test(trimmed);
+    // Detect headings - lines that are all caps, end with colon, or are short and start with capital
+    const isHeading = (
+      /^[A-Z][A-Z\s]+:?$/.test(trimmed) || 
+      /^[A-Z][^a-z]*$/.test(trimmed) ||
+      (/^[A-Z]/.test(trimmed) && trimmed.length < 40 && trimmed.endsWith(':'))
+    );
     
-    if (isHeading && trimmed.length < 50) {
-      doc.fontSize(12)
+    // Also check for common heading patterns
+    const headingPatterns = [
+      /^(Offer Overview|Compensation|Joining Details|Sign-off|Acceptance|Best regards)/i,
+      /^[A-Z][a-z]+ [A-Z][a-z]+:$/ // "First Word Second Word:"
+    ];
+    
+    const isPatternHeading = headingPatterns.some(pattern => pattern.test(trimmed));
+    
+    if ((isHeading || isPatternHeading) && trimmed.length < 50) {
+      doc.fontSize(11)
          .font('Helvetica-Bold')
          .fillColor('#2c3e50')
          .text(trimmed.replace(/:/g, ''), { align: 'left' });
-      doc.moveDown(0.3);
+      doc.moveDown(0.2);
     } else {
-      doc.fontSize(11)
-         .font('Helvetica')
-         .fillColor('#333333')
-         .text(trimmed, { 
-           align: 'left',
-           lineGap: 2,
-           paragraphGap: 5
-         });
+      // Check for bold text markers **text**
+      const boldRegex = /\*\*([^*]+)\*\*/g;
+      if (boldRegex.test(trimmed)) {
+        // Process line with bold markers
+        let lastIndex = 0;
+        let match;
+        boldRegex.lastIndex = 0; // Reset regex
+        let hasText = false;
+        
+        while ((match = boldRegex.exec(trimmed)) !== null) {
+          // Add text before bold marker
+          if (match.index > lastIndex) {
+            const beforeText = trimmed.substring(lastIndex, match.index);
+            if (beforeText) {
+              doc.fontSize(10)
+                 .font('Helvetica')
+                 .fillColor('#333333')
+                 .text(beforeText, { 
+                   align: 'left',
+                   lineGap: 1,
+                   continued: true
+                 });
+              hasText = true;
+            }
+          }
+          
+          // Add bold text
+          doc.fontSize(10)
+             .font('Helvetica-Bold')
+             .fillColor('#333333')
+             .text(match[1], { 
+               align: 'left',
+               lineGap: 1,
+               continued: true
+             });
+          hasText = true;
+          
+          lastIndex = match.index + match[0].length;
+        }
+        
+        // Add remaining text after last bold marker
+        if (lastIndex < trimmed.length) {
+          const afterText = trimmed.substring(lastIndex);
+          if (afterText) {
+            doc.fontSize(10)
+               .font('Helvetica')
+               .fillColor('#333333')
+               .text(afterText, { 
+                 align: 'left',
+                 lineGap: 1,
+                 continued: false
+               });
+            hasText = true;
+          }
+        }
+        
+        if (!hasText) {
+          // Fallback if no text was added
+          doc.fontSize(10)
+             .font('Helvetica')
+             .fillColor('#333333')
+             .text(trimmed.replace(/\*\*/g, ''), { 
+               align: 'left',
+               lineGap: 1.5
+             });
+        }
+        
+        doc.moveDown(0.3);
+      } else {
+        doc.fontSize(10)
+           .font('Helvetica')
+           .fillColor('#333333')
+           .text(trimmed, { 
+             align: 'left',
+             lineGap: 1.5,
+             paragraphGap: 3
+           });
+      }
     }
   });
 
-  doc.moveDown(2);
+  doc.moveDown(1.2);
 
-  // Signature Section
-  doc.fontSize(11)
+  // Signature Section - Compact
+  doc.fontSize(10)
      .font('Helvetica-Bold')
      .fillColor('#2c3e50')
      .text('Signing Authority', { align: 'left' });
-  doc.moveDown(0.8);
+  doc.moveDown(0.5);
 
   // Try to load signature image
   let signatureLoaded = false;
@@ -197,10 +279,10 @@ const buildOfferLetterPdfBuffer = async (company, offer, content) => {
       try {
         const signatureResponse = await axios.get(signatureUrl, { responseType: 'arraybuffer' });
         doc.image(signatureResponse.data, {
-          width: 120,
+          width: 100,
           align: 'left'
         });
-        doc.moveDown(0.3);
+        doc.moveDown(0.2);
         signatureLoaded = true;
       } catch (urlError) {
         console.warn('Unable to load signature from URL:', urlError.message);
@@ -212,10 +294,10 @@ const buildOfferLetterPdfBuffer = async (company, offer, content) => {
       for (const signaturePath of signaturePaths) {
         if (fs.existsSync(signaturePath)) {
           doc.image(signaturePath, {
-            width: 120,
+            width: 100,
             align: 'left'
           });
-          doc.moveDown(0.3);
+          doc.moveDown(0.2);
           signatureLoaded = true;
           break;
         }
@@ -225,18 +307,18 @@ const buildOfferLetterPdfBuffer = async (company, offer, content) => {
     console.warn('Signature image not found, using text only:', error.message);
   }
 
-  // Signing Authority Details
-  doc.fontSize(11)
+  // Signing Authority Details - Compact
+  doc.fontSize(10)
      .font('Helvetica')
      .fillColor('#333333')
      .text(company?.signingAuthority?.name || '', { align: 'left' });
-  doc.moveDown(0.2);
-  doc.fontSize(10)
+  doc.moveDown(0.1);
+  doc.fontSize(9)
      .font('Helvetica')
      .fillColor('#666666')
      .text(company?.signingAuthority?.title || '', { align: 'left' });
-  doc.moveDown(0.5);
-  doc.fontSize(9)
+  doc.moveDown(0.3);
+  doc.fontSize(8)
      .font('Helvetica-Oblique')
      .fillColor('#888888')
      .text(`Digitally signed by ${company?.signingAuthority?.name || ''}`, { align: 'left' });
