@@ -189,6 +189,7 @@ const uploadToCloudinary = async (req, res, next) => {
             url: result.url,
             publicId: result.publicId,
             fileName: file.originalname,
+            mimeType: file.mimetype,
             size: result.bytes,
           }))
           .catch(error => {

@@ -137,10 +137,14 @@ const streamDocumentFile = async (res, document, disposition = 'inline') => {
 
   const fileResponse = await axios.get(signedUrl, { responseType: 'arraybuffer' });
   const contentType = fileResponse.headers['content-type'] || 'application/octet-stream';
+  let fileName = document.fileName || document.title || 'document';
+  if (!/\.[a-z0-9]+$/i.test(fileName) && contentType.includes('pdf')) {
+    fileName = `${fileName}.pdf`;
+  }
   res.setHeader('Content-Type', contentType);
   res.setHeader(
     'Content-Disposition',
-    `${disposition}; filename="${(document.title || 'document').replace(/\s+/g, '-')}"` 
+    `${disposition}; filename="${fileName.replace(/\s+/g, '-')}"` 
   );
   return res.send(fileResponse.data);
 };
@@ -1002,10 +1006,12 @@ router.post('/employee/documents', requireHiringAuth(['employee']), upload.field
     const doc = await HiringDocument.create({
       companyId: req.hiringUser.companyId,
       employeeId: req.hiringUser.employeeId,
-      title: title || docFile.name,
+      title: title || docFile.fileName,
       type: type || 'document',
       fileUrl: docFile.url,
       filePublicId: docFile.publicId,
+      fileName: docFile.fileName || '',
+      fileMimeType: docFile.mimeType || '',
       content: docFile.url,
       createdBy: req.hiringUser.employeeId,
       createdByRole: 'employee'
