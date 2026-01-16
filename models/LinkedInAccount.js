@@ -11,8 +11,8 @@ const LinkedInAccountSchema = new mongoose.Schema({
   // Connection method
   connectionMethod: {
     type: String,
-    enum: ['cookies', 'extension'],
-    default: 'extension'
+    enum: ['cookies', 'extension', 'browser_session'],
+    default: 'browser_session'
   },
   // Extension ID (for extension-based connection)
   extensionId: String,

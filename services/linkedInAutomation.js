@@ -1,101 +1,11 @@
-const { chromium } = require('playwright');
-const crypto = require('crypto');
-
-// Store browser contexts per account
-const browserContexts = new Map();
+const { getAutomationContext } = require('./linkedInSession');
 
 /**
- * Get or create browser context for a LinkedIn account
- * Each account gets its own isolated browser session
+ * Get browser context for automation
+ * Uses active session if available, otherwise falls back to stored cookies
  */
 async function getBrowserContext(account, proxy = null) {
-  const contextKey = account._id.toString();
-  
-  if (browserContexts.has(contextKey)) {
-    const context = browserContexts.get(contextKey);
-    // Check if context is still valid
-    if (context && !context.browser()?.isConnected()) {
-      browserContexts.delete(contextKey);
-    } else {
-      return context;
-    }
-  }
-
-  // Create new browser context
-  const browser = await chromium.launch({
-    headless: true,
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-blink-features=AutomationControlled'
-    ]
-  });
-
-  const contextOptions = {
-    viewport: { width: 1920, height: 1080 },
-    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    locale: 'en-US',
-    timezoneId: 'America/New_York'
-  };
-
-  if (proxy) {
-    contextOptions.proxy = {
-      server: `${proxy.type}://${proxy.host}:${proxy.port}`,
-      username: proxy.username,
-      password: proxy.password
-    };
-  }
-
-  const context = await browser.newContext(contextOptions);
-
-  // Inject cookies
-  const cookies = account.getCookies();
-  if (cookies.li_at && cookies.JSESSIONID) {
-    await context.addCookies([
-      {
-        name: 'li_at',
-        value: cookies.li_at,
-        domain: '.linkedin.com',
-        path: '/'
-      },
-      {
-        name: 'JSESSIONID',
-        value: cookies.JSESSIONID,
-        domain: '.linkedin.com',
-        path: '/'
-      }
-    ]);
-  }
-
-  // Add stealth scripts
-  await context.addInitScript(() => {
-    // Override webdriver
-    Object.defineProperty(navigator, 'webdriver', {
-      get: () => false
-    });
-
-    // Override plugins
-    Object.defineProperty(navigator, 'plugins', {
-      get: () => [1, 2, 3, 4, 5]
-    });
-
-    // Override languages
-    Object.defineProperty(navigator, 'languages', {
-      get: () => ['en-US', 'en']
-    });
-
-    // Override permissions
-    const originalQuery = window.navigator.permissions.query;
-    window.navigator.permissions.query = (parameters) => (
-      parameters.name === 'notifications' ?
-        Promise.resolve({ state: Notification.permission }) :
-        originalQuery(parameters)
-    );
-  });
-
-  browserContexts.set(contextKey, context);
-  return context;
+  return await getAutomationContext(account, proxy);
 }
 
 /**

@@ -9,6 +9,12 @@ const LinkedInLog = require('../models/LinkedInLog');
 const LinkedInTemplate = require('../models/LinkedInTemplate');
 const { addInboxSyncTask, addMessageTask, addConnectionTask } = require('../services/linkedInQueue');
 const { generateAIResponse } = require('../services/openaiService');
+const { 
+  createLoginSession, 
+  getSessionStatus, 
+  getSessionCookies, 
+  closeSession 
+} = require('../services/linkedInSession');
 
 // All routes require authentication
 router.use(protect);
@@ -30,46 +36,173 @@ router.get('/accounts', async (req, res) => {
 });
 
 /**
- * POST /api/linkedin-helper/accounts
- * Create/connect a LinkedIn account (Extension-based, no cookies needed)
+ * POST /api/linkedin-helper/accounts/login-session
+ * Create a login session - opens browser for user to log in
  */
-router.post('/accounts', async (req, res) => {
+router.post('/accounts/login-session', async (req, res) => {
   try {
-    const { extensionId, proxy, consentAccepted } = req.body;
+    const { consentAccepted } = req.body;
 
     if (!consentAccepted) {
       return res.status(400).json({ message: 'You must accept the terms and risks' });
     }
 
     // Check if account already exists
+    const existingAccount = await LinkedInAccount.findOne({ userId: req.user._id });
+    
+    const session = await createLoginSession(
+      req.user._id, 
+      existingAccount?._id || null
+    );
+
+    res.json({ 
+      success: true, 
+      sessionId: session.sessionId,
+      message: 'Browser window opened. Please log in to LinkedIn.',
+      instructions: session.instructions
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+/**
+ * GET /api/linkedin-helper/accounts/login-session/:sessionId/status
+ * Check login session status
+ */
+router.get('/accounts/login-session/:sessionId/status', async (req, res) => {
+  try {
+    const status = getSessionStatus(req.params.sessionId);
+    
+    if (!status.exists) {
+      return res.status(404).json({ message: 'Session not found' });
+    }
+
+    res.json({ success: true, ...status });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+/**
+ * POST /api/linkedin-helper/accounts/connect
+ * Connect account after successful login
+ */
+router.post('/accounts/connect', async (req, res) => {
+  try {
+    const { sessionId, proxy } = req.body;
+
+    if (!sessionId) {
+      return res.status(400).json({ message: 'sessionId is required' });
+    }
+
+    // Get cookies from session
+    const cookies = getSessionCookies(sessionId);
+    if (!cookies) {
+      return res.status(400).json({ 
+        message: 'Login not completed. Please complete login in the browser window.' 
+      });
+    }
+
+    // Get session info
+    const sessionStatus = getSessionStatus(sessionId);
+    if (!sessionStatus.exists || sessionStatus.status !== 'logged_in') {
+      return res.status(400).json({ 
+        message: 'Login not completed. Please complete login in the browser window.' 
+      });
+    }
+
+    // Check if account already exists
     let account = await LinkedInAccount.findOne({ userId: req.user._id });
 
     if (account) {
-      // Update existing account
+      // Update existing account with new session
+      account.setCookies(cookies.li_at, cookies.JSESSIONID);
       if (proxy) account.proxy = proxy;
-      if (extensionId) account.extensionId = extensionId;
       account.consentAccepted = true;
       account.consentAcceptedAt = new Date();
       account.status = 'active';
-      account.connectionMethod = 'extension';
+      account.connectionMethod = 'browser_session';
+      if (sessionStatus.profileInfo) {
+        account.linkedInName = sessionStatus.profileInfo.name;
+        account.linkedInProfileUrl = sessionStatus.profileInfo.profileUrl;
+      }
       await account.save();
     } else {
-      // Create new account (extension-based, no cookies stored)
+      // Create new account
       account = new LinkedInAccount({
         userId: req.user._id,
-        extensionId: extensionId || null,
         proxy: proxy || null,
         consentAccepted: true,
         consentAcceptedAt: new Date(),
         connectedAt: new Date(),
-        connectionMethod: 'extension'
+        connectionMethod: 'browser_session'
       });
-      // For extension method, we don't store cookies
-      // Extension handles authentication directly
+      account.setCookies(cookies.li_at, cookies.JSESSIONID);
+      if (sessionStatus.profileInfo) {
+        account.linkedInName = sessionStatus.profileInfo.name;
+        account.linkedInProfileUrl = sessionStatus.profileInfo.profileUrl;
+      }
       await account.save();
     }
 
-    res.json({ success: true, account: account.toObject() });
+    // Close the login session (but keep browser context for automation)
+    // We'll keep the session active for automation
+    // await closeSession(sessionId);
+
+    res.json({ 
+      success: true, 
+      account: account.toObject(),
+      message: 'Account connected successfully!'
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+/**
+ * POST /api/linkedin-helper/accounts
+ * Create/connect a LinkedIn account (Legacy - for cookie-based)
+ */
+router.post('/accounts', async (req, res) => {
+  try {
+    const { liAt, JSESSIONID, proxy, consentAccepted } = req.body;
+
+    if (!consentAccepted) {
+      return res.status(400).json({ message: 'You must accept the terms and risks' });
+    }
+
+    // Cookie-based connection (legacy)
+    if (liAt && JSESSIONID) {
+      let account = await LinkedInAccount.findOne({ userId: req.user._id });
+
+      if (account) {
+        account.setCookies(liAt, JSESSIONID);
+        if (proxy) account.proxy = proxy;
+        account.consentAccepted = true;
+        account.consentAcceptedAt = new Date();
+        account.status = 'active';
+        account.connectionMethod = 'cookies';
+        await account.save();
+      } else {
+        account = new LinkedInAccount({
+          userId: req.user._id,
+          proxy: proxy || null,
+          consentAccepted: true,
+          consentAcceptedAt: new Date(),
+          connectedAt: new Date(),
+          connectionMethod: 'cookies'
+        });
+        account.setCookies(liAt, JSESSIONID);
+        await account.save();
+      }
+
+      return res.json({ success: true, account: account.toObject() });
+    }
+
+    return res.status(400).json({ 
+      message: 'Please use /login-session endpoint for secure connection' 
+    });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
   }
