@@ -16,7 +16,7 @@ const HiringOfferLetterSchema = new mongoose.Schema({
   signingAuthorityName: { type: String, default: '' },
   signingAuthorityTitle: { type: String, default: '' },
   status: { type: String, default: 'draft' },
-  createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'HiringCompanyAdmin', required: true }
+  createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'HiringCompanyAdmin', default: null }
 }, { timestamps: true });
 
 module.exports = mongoose.model('HiringOfferLetter', HiringOfferLetterSchema);

@@ -22,6 +22,10 @@ const fileFilter = (req, file, cb) => {
   else if (file.fieldname === 'document') {
     cb(null, true);
   }
+  // Accept employee offer letters
+  else if (file.fieldname === 'offerLetter') {
+    cb(null, true);
+  }
   // Accept all files
   else if (file.fieldname === 'file') {
     cb(null, true);

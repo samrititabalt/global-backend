@@ -10,6 +10,7 @@ const {
   uploadToCloudinary: uploadRawToCloudinary,
   deleteFromCloudinary,
   getSignedDownloadUrl,
+  getSignedUrl,
 } = require('../services/cloudinary');
 const { protect, authorize } = require('../middleware/auth');
 const HiringCompany = require('../models/HiringCompany');
@@ -124,6 +125,24 @@ const buildOfferLetterPdfBuffer = async (company, offer, content) => {
     doc.on('error', reject);
     doc.end();
   });
+};
+
+const streamDocumentFile = async (res, document, disposition = 'inline') => {
+  const signedUrl = document.filePublicId
+    ? getSignedUrl(document.filePublicId, { resource_type: 'raw', type: 'upload' })
+    : document.fileUrl;
+  if (!signedUrl) {
+    return res.status(404).json({ message: 'Document file not available' });
+  }
+
+  const fileResponse = await axios.get(signedUrl, { responseType: 'arraybuffer' });
+  const contentType = fileResponse.headers['content-type'] || 'application/octet-stream';
+  res.setHeader('Content-Type', contentType);
+  res.setHeader(
+    'Content-Disposition',
+    `${disposition}; filename="${(document.title || 'document').replace(/\s+/g, '-')}"` 
+  );
+  return res.send(fileResponse.data);
 };
 
 const ensureSeedCompanies = async () => {
@@ -986,6 +1005,7 @@ router.post('/employee/documents', requireHiringAuth(['employee']), upload.field
       title: title || docFile.name,
       type: type || 'document',
       fileUrl: docFile.url,
+      filePublicId: docFile.publicId,
       content: docFile.url,
       createdBy: req.hiringUser.employeeId,
       createdByRole: 'employee'
@@ -1005,6 +1025,61 @@ router.get('/employee/documents', requireHiringAuth(['employee']), async (req, r
     res.json({ success: true, documents });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+router.get('/employee/documents/:id/view', requireHiringAuth(['employee']), async (req, res) => {
+  try {
+    const document = await HiringDocument.findOne({
+      _id: req.params.id,
+      companyId: req.hiringUser.companyId,
+      employeeId: req.hiringUser.employeeId
+    });
+    if (!document) return res.status(404).json({ message: 'Document not found' });
+    return await streamDocumentFile(res, document, 'inline');
+  } catch (error) {
+    return res.status(500).json({ message: 'Unable to load document' });
+  }
+});
+
+router.get('/employee/documents/:id/download', requireHiringAuth(['employee']), async (req, res) => {
+  try {
+    const document = await HiringDocument.findOne({
+      _id: req.params.id,
+      companyId: req.hiringUser.companyId,
+      employeeId: req.hiringUser.employeeId
+    });
+    if (!document) return res.status(404).json({ message: 'Document not found' });
+    return await streamDocumentFile(res, document, 'attachment');
+  } catch (error) {
+    return res.status(500).json({ message: 'Unable to download document' });
+  }
+});
+
+router.delete('/employee/documents/:id', requireHiringAuth(['employee']), async (req, res) => {
+  try {
+    const document = await HiringDocument.findOne({
+      _id: req.params.id,
+      companyId: req.hiringUser.companyId,
+      employeeId: req.hiringUser.employeeId
+    });
+    if (!document) return res.status(404).json({ message: 'Document not found' });
+    if (document.filePublicId) {
+      try {
+        await deleteFromCloudinary(document.filePublicId, 'raw');
+      } catch (error) {
+        console.error('Document delete error (raw):', error);
+      }
+      try {
+        await deleteFromCloudinary(document.filePublicId, 'image');
+      } catch (error) {
+        console.error('Document delete error (image):', error);
+      }
+    }
+    await document.deleteOne();
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ message: 'Unable to delete document' });
   }
 });
 
@@ -1039,6 +1114,162 @@ router.get('/company/employees/:id', requireHiringAuth(['company_admin']), async
     res.json({ success: true, employee, profile, timesheets, holidays, documents, offerLetters, expenses });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+router.get('/company/documents/:id/view', requireHiringAuth(['company_admin']), async (req, res) => {
+  try {
+    const document = await HiringDocument.findOne({
+      _id: req.params.id,
+      companyId: req.hiringUser.companyId
+    });
+    if (!document) return res.status(404).json({ message: 'Document not found' });
+    return await streamDocumentFile(res, document, 'inline');
+  } catch (error) {
+    return res.status(500).json({ message: 'Unable to load document' });
+  }
+});
+
+router.get('/company/documents/:id/download', requireHiringAuth(['company_admin']), async (req, res) => {
+  try {
+    const document = await HiringDocument.findOne({
+      _id: req.params.id,
+      companyId: req.hiringUser.companyId
+    });
+    if (!document) return res.status(404).json({ message: 'Document not found' });
+    return await streamDocumentFile(res, document, 'attachment');
+  } catch (error) {
+    return res.status(500).json({ message: 'Unable to download document' });
+  }
+});
+
+router.delete('/company/documents/:id', requireHiringAuth(['company_admin']), async (req, res) => {
+  try {
+    const document = await HiringDocument.findOne({
+      _id: req.params.id,
+      companyId: req.hiringUser.companyId
+    });
+    if (!document) return res.status(404).json({ message: 'Document not found' });
+    if (document.filePublicId) {
+      try {
+        await deleteFromCloudinary(document.filePublicId, 'raw');
+      } catch (error) {
+        console.error('Document delete error (raw):', error);
+      }
+      try {
+        await deleteFromCloudinary(document.filePublicId, 'image');
+      } catch (error) {
+        console.error('Document delete error (image):', error);
+      }
+    }
+    await document.deleteOne();
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ message: 'Unable to delete document' });
+  }
+});
+
+router.post('/employee/offer-letters/upload', requireHiringAuth(['employee']), upload.fields([{ name: 'offerLetter', maxCount: 1 }]), async (req, res) => {
+  try {
+    const offerFile = req.files?.offerLetter?.[0];
+    if (!offerFile) {
+      return res.status(400).json({ message: 'Offer letter PDF is required' });
+    }
+    if (!offerFile.mimetype.includes('pdf')) {
+      return res.status(400).json({ message: 'Offer letter must be a PDF file' });
+    }
+
+    const employee = await HiringEmployee.findById(req.hiringUser.employeeId);
+    if (!employee) return res.status(404).json({ message: 'Employee not found' });
+    const company = await HiringCompany.findById(req.hiringUser.companyId);
+    if (!company) return res.status(404).json({ message: 'Company not found' });
+
+    const uploadResult = await uploadRawToCloudinary(offerFile.buffer, {
+      folder: `hiring-pro/offer-letters/${company._id}`,
+      resource_type: 'image',
+      format: 'pdf',
+      public_id: `employee-offer-letter-${Date.now()}`,
+      content_type: 'application/pdf',
+      type: 'upload'
+    });
+
+    const offerLetter = await HiringOfferLetter.create({
+      companyId: company._id,
+      employeeId: employee._id,
+      candidateName: employee.name,
+      roleTitle: employee.designation || 'Employee',
+      startDate: new Date().toISOString().split('T')[0],
+      salaryPackage: 'N/A',
+      ctcBreakdown: '',
+      content: 'Uploaded offer letter',
+      fileUrl: uploadResult?.secure_url || null,
+      filePublicId: uploadResult?.public_id || null,
+      companyName: company.name || '',
+      companyLogoUrl: company.logoUrl || null,
+      signingAuthorityName: company.signingAuthority?.name || '',
+      signingAuthorityTitle: company.signingAuthority?.title || '',
+      status: 'uploaded',
+      createdBy: null
+    });
+
+    res.json({ success: true, offerLetter });
+  } catch (error) {
+    console.error('Employee offer letter upload error:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+router.get('/employee/offer-letters/:id/view', requireHiringAuth(['employee']), async (req, res) => {
+  try {
+    const offerLetter = await HiringOfferLetter.findOne({
+      _id: req.params.id,
+      companyId: req.hiringUser.companyId,
+      employeeId: req.hiringUser.employeeId
+    });
+    if (!offerLetter || !offerLetter.fileUrl) {
+      return res.status(404).json({ message: 'Offer letter not found' });
+    }
+
+    const signedUrl = offerLetter.filePublicId
+      ? getSignedDownloadUrl(offerLetter.filePublicId, 'pdf', { resource_type: 'image', type: 'upload' })
+      : offerLetter.fileUrl;
+
+    const fileResponse = await axios.get(signedUrl, { responseType: 'arraybuffer' });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      `inline; filename="offer-letter-${offerLetter.candidateName || 'document'}.pdf"`
+    );
+    return res.send(fileResponse.data);
+  } catch (error) {
+    return res.status(500).json({ message: 'Unable to load offer letter' });
+  }
+});
+
+router.get('/employee/offer-letters/:id/download', requireHiringAuth(['employee']), async (req, res) => {
+  try {
+    const offerLetter = await HiringOfferLetter.findOne({
+      _id: req.params.id,
+      companyId: req.hiringUser.companyId,
+      employeeId: req.hiringUser.employeeId
+    });
+    if (!offerLetter || !offerLetter.fileUrl) {
+      return res.status(404).json({ message: 'Offer letter not found' });
+    }
+
+    const signedUrl = offerLetter.filePublicId
+      ? getSignedDownloadUrl(offerLetter.filePublicId, 'pdf', { resource_type: 'image', type: 'upload' })
+      : offerLetter.fileUrl;
+
+    const fileResponse = await axios.get(signedUrl, { responseType: 'arraybuffer' });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="offer-letter-${offerLetter.candidateName || 'document'}.pdf"`
+    );
+    return res.send(fileResponse.data);
+  } catch (error) {
+    return res.status(500).json({ message: 'Unable to download offer letter' });
   }
 });
 
