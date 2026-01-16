@@ -18,6 +18,10 @@ const fileFilter = (req, file, cb) => {
       cb(new Error('Only image files are allowed'), false);
     }
   }
+  // Accept documents
+  else if (file.fieldname === 'document') {
+    cb(null, true);
+  }
   // Accept all files
   else if (file.fieldname === 'file') {
     cb(null, true);
@@ -167,6 +171,25 @@ const uploadToCloudinary = async (req, res, next) => {
           .catch(error => {
             console.error(`Error uploading file ${file.originalname}:`, error);
             throw new Error(`Failed to upload file: ${error.message}`);
+          });
+        uploadPromises.push(uploadPromise);
+      }
+    }
+
+    // Upload documents
+    if (req.files.document && req.files.document.length > 0) {
+      for (const file of req.files.document) {
+        const uploadPromise = uploadFile(file.buffer, `hiring-pro/documents/${uploadOwnerId}`, file.mimetype)
+          .then(result => ({
+            type: 'document',
+            url: result.url,
+            publicId: result.publicId,
+            fileName: file.originalname,
+            size: result.bytes,
+          }))
+          .catch(error => {
+            console.error(`Error uploading document ${file.originalname}:`, error);
+            throw new Error(`Failed to upload document: ${error.message}`);
           });
         uploadPromises.push(uploadPromise);
       }
