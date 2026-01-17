@@ -18,6 +18,7 @@ server.headersTimeout = 300000; // Headers timeout for large uploads
 const allowedOrigins = [
   process.env.FRONTEND_URL || 'https://mainproduct.vercel.app',
   'https://mainproduct.vercel.app',
+  'https://www.samstudios.uk',
   'http://localhost:5173',
   'http://localhost:3000'
 ];
