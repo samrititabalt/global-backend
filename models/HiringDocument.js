@@ -6,6 +6,9 @@ const HiringDocumentSchema = new mongoose.Schema({
   title: { type: String, required: true },
   type: { type: String, required: true },
   fileUrl: { type: String, default: null },
+  filePublicId: { type: String, default: null },
+  fileName: { type: String, default: '' },
+  fileMimeType: { type: String, default: '' },
   content: { type: String, required: true },
   createdBy: { type: mongoose.Schema.Types.ObjectId, required: true },
   createdByRole: { type: String, default: 'employee' }

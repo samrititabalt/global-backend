@@ -18,6 +18,14 @@ const fileFilter = (req, file, cb) => {
       cb(new Error('Only image files are allowed'), false);
     }
   }
+  // Accept documents
+  else if (file.fieldname === 'document') {
+    cb(null, true);
+  }
+  // Accept employee offer letters
+  else if (file.fieldname === 'offerLetter') {
+    cb(null, true);
+  }
   // Accept all files
   else if (file.fieldname === 'file') {
     cb(null, true);
@@ -60,12 +68,17 @@ const uploadToCloudinary = async (req, res, next) => {
   }
 
   try {
+    const uploadOwnerId = req.user?._id
+      || req.hiringUser?.employeeId
+      || req.hiringUser?.adminId
+      || req.hiringUser?.companyId
+      || 'temp';
     const uploadPromises = [];
 
     // Upload images
     if (req.files.image && req.files.image.length > 0) {
       for (const file of req.files.image) {
-        const uploadPromise = uploadImage(file.buffer, `chat-media/images/${req.user?._id || 'temp'}`, file.mimetype)
+        const uploadPromise = uploadImage(file.buffer, `chat-media/images/${uploadOwnerId}`, file.mimetype)
           .then(result => ({
             type: 'image',
             url: result.url,
@@ -86,7 +99,7 @@ const uploadToCloudinary = async (req, res, next) => {
     // Upload company logos
     if (req.files.logo && req.files.logo.length > 0) {
       for (const file of req.files.logo) {
-        const uploadPromise = uploadImage(file.buffer, `hiring-pro/logos/${req.user?._id || 'temp'}`, file.mimetype)
+        const uploadPromise = uploadImage(file.buffer, `hiring-pro/logos/${uploadOwnerId}`, file.mimetype)
           .then(result => ({
             type: 'logo',
             url: result.url,
@@ -107,7 +120,10 @@ const uploadToCloudinary = async (req, res, next) => {
     // Upload avatar
     if (req.files.avatar && req.files.avatar.length > 0) {
       for (const file of req.files.avatar) {
-        const uploadPromise = uploadImage(file.buffer, `avatars/${req.user?._id || 'temp'}`, file.mimetype)
+        const avatarFolder = req.hiringUser?.employeeId
+          ? `hiring-pro/employee-avatars/${req.hiringUser.employeeId}`
+          : `avatars/${uploadOwnerId}`;
+        const uploadPromise = uploadImage(file.buffer, avatarFolder, file.mimetype)
           .then(result => ({
             type: 'avatar',
             url: result.url,
@@ -128,7 +144,7 @@ const uploadToCloudinary = async (req, res, next) => {
     // Upload audio files
     if (req.files.audio && req.files.audio.length > 0) {
       for (const file of req.files.audio) {
-        const uploadPromise = uploadAudio(file.buffer, `chat-media/audio/${req.user._id}`, file.mimetype)
+        const uploadPromise = uploadAudio(file.buffer, `chat-media/audio/${uploadOwnerId}`, file.mimetype)
           .then(result => ({
             type: 'audio',
             url: result.url,
@@ -148,7 +164,7 @@ const uploadToCloudinary = async (req, res, next) => {
     // Upload files
     if (req.files.file && req.files.file.length > 0) {
       for (const file of req.files.file) {
-        const uploadPromise = uploadFile(file.buffer, `chat-media/files/${req.user._id}`, file.mimetype)
+        const uploadPromise = uploadFile(file.buffer, `chat-media/files/${uploadOwnerId}`, file.mimetype)
           .then(result => ({
             type: 'file',
             url: result.url,
@@ -159,6 +175,26 @@ const uploadToCloudinary = async (req, res, next) => {
           .catch(error => {
             console.error(`Error uploading file ${file.originalname}:`, error);
             throw new Error(`Failed to upload file: ${error.message}`);
+          });
+        uploadPromises.push(uploadPromise);
+      }
+    }
+
+    // Upload documents
+    if (req.files.document && req.files.document.length > 0) {
+      for (const file of req.files.document) {
+        const uploadPromise = uploadFile(file.buffer, `hiring-pro/documents/${uploadOwnerId}`, file.mimetype)
+          .then(result => ({
+            type: 'document',
+            url: result.url,
+            publicId: result.publicId,
+            fileName: file.originalname,
+            mimeType: file.mimetype,
+            size: result.bytes,
+          }))
+          .catch(error => {
+            console.error(`Error uploading document ${file.originalname}:`, error);
+            throw new Error(`Failed to upload document: ${error.message}`);
           });
         uploadPromises.push(uploadPromise);
       }

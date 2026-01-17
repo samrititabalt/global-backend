@@ -3,6 +3,8 @@ const mongoose = require('mongoose');
 const HiringEmployeeProfileSchema = new mongoose.Schema({
   companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'HiringCompany', required: true, index: true },
   employeeId: { type: mongoose.Schema.Types.ObjectId, ref: 'HiringEmployee', required: true, index: true },
+  profileImageUrl: { type: String, default: '' },
+  profileImagePublicId: { type: String, default: '' },
   phone: { type: String, default: '' },
   emergencyContact: { type: String, default: '' },
   bloodGroup: { type: String, default: '' },

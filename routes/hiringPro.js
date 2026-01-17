@@ -5,13 +5,12 @@ const mongoose = require('mongoose');
 const crypto = require('crypto');
 const axios = require('axios');
 const PDFDocument = require('pdfkit');
-const path = require('path');
-const fs = require('fs');
 const { upload, uploadToCloudinary } = require('../middleware/cloudinaryUpload');
 const {
   uploadToCloudinary: uploadRawToCloudinary,
   deleteFromCloudinary,
   getSignedDownloadUrl,
+  getSignedUrl,
 } = require('../services/cloudinary');
 const { protect, authorize } = require('../middleware/auth');
 const HiringCompany = require('../models/HiringCompany');
@@ -59,42 +58,7 @@ const requireHiringAuth = (roles = []) => (req, res, next) => {
 };
 
 const sanitizeOfferContent = (content = '') => {
-  // If content is HTML (from WYSIWYG editor), convert to plain text first
-  let plainText = content;
-  if (content.includes('<') && content.includes('>')) {
-    // Convert HTML to plain text
-    plainText = content
-      .replace(/<h[1-6][^>]*>/gi, '\n') // Headings become new lines
-      .replace(/<\/h[1-6]>/gi, '\n')
-      .replace(/<p[^>]*>/gi, '') // Remove paragraph tags
-      .replace(/<\/p>/gi, '\n')
-      .replace(/<br\s*\/?>/gi, '\n') // Line breaks
-      .replace(/<strong[^>]*>/gi, '**') // Bold tags to **
-      .replace(/<\/strong>/gi, '**')
-      .replace(/<b[^>]*>/gi, '**')
-      .replace(/<\/b>/gi, '**')
-      .replace(/<em[^>]*>/gi, '*') // Italic tags to *
-      .replace(/<\/em>/gi, '*')
-      .replace(/<i[^>]*>/gi, '*')
-      .replace(/<\/i>/gi, '*')
-      .replace(/<u[^>]*>/gi, '') // Remove underline tags
-      .replace(/<\/u>/gi, '')
-      .replace(/<ul[^>]*>/gi, '\n') // Lists
-      .replace(/<\/ul>/gi, '\n')
-      .replace(/<ol[^>]*>/gi, '\n')
-      .replace(/<\/ol>/gi, '\n')
-      .replace(/<li[^>]*>/gi, '• ')
-      .replace(/<\/li>/gi, '\n')
-      .replace(/<[^>]+>/g, '') // Remove all remaining HTML tags
-      .replace(/&nbsp;/g, ' ')
-      .replace(/&amp;/g, '&')
-      .replace(/&lt;/g, '<')
-      .replace(/&gt;/g, '>')
-      .replace(/&quot;/g, '"')
-      .replace(/&#39;/g, "'");
-  }
-  
-  return plainText
+  return content
     .split(/\r?\n/)
     .filter((line) => {
       const trimmed = line.trim();
@@ -103,266 +67,86 @@ const sanitizeOfferContent = (content = '') => {
       return true;
     })
     .join('\n')
-    .trim()
-    // Remove unwanted markdown formatting but preserve ** for intentional bold
-    .replace(/#{1,6}\s/g, '') // Remove heading markers
-    .replace(/\[([^\]]+)\]\([^\)]+\)/g, '$1') // Convert links to plain text
-    .replace(/`([^`]+)`/g, '$1') // Remove code markers
-    // Keep ** markers for bold text (they'll be processed in PDF generation)
-    .replace(/\*(?!\*)/g, ''); // Remove single * (italics) but keep **
+    .trim();
 };
 
 const buildOfferLetterPdfBuffer = async (company, offer, content) => {
-  const doc = new PDFDocument({ 
-    size: 'A4', 
-    margin: 50, // Reduced margins to fit more content
-    info: {
-      Title: `Offer Letter - ${offer.candidateName}`,
-      Author: company?.name || 'Tabalt Ltd',
-      Subject: 'Employment Offer Letter'
-    }
-  });
+  const doc = new PDFDocument({ size: 'A4', margin: 50 });
   const chunks = [];
   doc.on('data', (chunk) => chunks.push(chunk));
 
-  // Compact Header Section
   if (company?.logoUrl) {
     try {
       const logoResponse = await axios.get(company.logoUrl, { responseType: 'arraybuffer' });
-      doc.image(logoResponse.data, { width: 80, align: 'left' });
-      doc.moveDown(0.3);
+      doc.image(logoResponse.data, { width: 120 });
+      doc.moveDown();
     } catch (error) {
       console.warn('Unable to load company logo for offer letter:', error.message);
     }
   }
 
-  // Company Name
   if (company?.name) {
-    doc.fontSize(18)
-       .font('Helvetica-Bold')
-       .fillColor('#1a1a1a')
-       .text(company.name, { align: 'left' });
-    doc.moveDown(0.2);
+    doc.fontSize(18).text(company.name);
+    doc.moveDown(0.5);
   }
 
-  // Title
-  doc.fontSize(14)
-     .font('Helvetica-Bold')
-     .fillColor('#2c3e50')
-     .text('Offer Letter', { align: 'left' });
-  doc.moveDown(0.8);
-
-  // Offer Details Section - Compact
-  doc.fontSize(10)
-     .font('Helvetica')
-     .fillColor('#333333');
-  
+  doc.fontSize(14).text('Offer Letter', { underline: true });
+  doc.moveDown();
   if (offer.startDate) {
-    doc.text(`Date: ${offer.startDate}`, { align: 'left' });
+    doc.fontSize(12).text(`Date: ${offer.startDate}`);
   }
-  doc.text(`Candidate: ${offer.candidateName}`, { align: 'left' });
-  doc.text(`Role: ${offer.roleTitle}`, { align: 'left' });
-  doc.text(`Salary Package: ${offer.salaryPackage}`, { align: 'left' });
-  
+  doc.fontSize(12).text(`Candidate: ${offer.candidateName}`);
+  doc.text(`Role: ${offer.roleTitle}`);
+  doc.text(`Salary Package: ${offer.salaryPackage}`);
   if (offer.ctcBreakdown) {
-    doc.moveDown(0.3);
-    doc.font('Helvetica-Bold').text('CTC Breakdown:', { continued: true });
-    doc.font('Helvetica').text(` ${offer.ctcBreakdown}`);
+    doc.moveDown(0.5);
+    doc.text(`CTC Breakdown: ${offer.ctcBreakdown}`);
   }
-  
-  doc.moveDown(1);
+  doc.moveDown();
 
-  // Main Content - Optimized for single page
   const lines = sanitizeOfferContent(content || '').split(/\r?\n/);
-  
   lines.forEach((line) => {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      doc.moveDown(0.3);
+    if (!line.trim()) {
+      doc.moveDown();
       return;
     }
-    
-    // Detect headings - lines that are all caps, end with colon, or are short and start with capital
-    const isHeading = (
-      /^[A-Z][A-Z\s]+:?$/.test(trimmed) || 
-      /^[A-Z][^a-z]*$/.test(trimmed) ||
-      (/^[A-Z]/.test(trimmed) && trimmed.length < 40 && trimmed.endsWith(':'))
-    );
-    
-    // Also check for common heading patterns
-    const headingPatterns = [
-      /^(Offer Overview|Compensation|Joining Details|Sign-off|Acceptance|Best regards)/i,
-      /^[A-Z][a-z]+ [A-Z][a-z]+:$/ // "First Word Second Word:"
-    ];
-    
-    const isPatternHeading = headingPatterns.some(pattern => pattern.test(trimmed));
-    
-    if ((isHeading || isPatternHeading) && trimmed.length < 50) {
-      doc.fontSize(11)
-         .font('Helvetica-Bold')
-         .fillColor('#2c3e50')
-         .text(trimmed.replace(/:/g, ''), { align: 'left' });
-      doc.moveDown(0.2);
-    } else {
-      // Check for bold text markers **text**
-      const boldRegex = /\*\*([^*]+)\*\*/g;
-      if (boldRegex.test(trimmed)) {
-        // Process line with bold markers
-        let lastIndex = 0;
-        let match;
-        boldRegex.lastIndex = 0; // Reset regex
-        let hasText = false;
-        
-        while ((match = boldRegex.exec(trimmed)) !== null) {
-          // Add text before bold marker
-          if (match.index > lastIndex) {
-            const beforeText = trimmed.substring(lastIndex, match.index);
-            if (beforeText) {
-              doc.fontSize(10)
-                 .font('Helvetica')
-                 .fillColor('#333333')
-                 .text(beforeText, { 
-                   align: 'left',
-                   lineGap: 1,
-                   continued: true
-                 });
-              hasText = true;
-            }
-          }
-          
-          // Add bold text
-          doc.fontSize(10)
-             .font('Helvetica-Bold')
-             .fillColor('#333333')
-             .text(match[1], { 
-               align: 'left',
-               lineGap: 1,
-               continued: true
-             });
-          hasText = true;
-          
-          lastIndex = match.index + match[0].length;
-        }
-        
-        // Add remaining text after last bold marker
-        if (lastIndex < trimmed.length) {
-          const afterText = trimmed.substring(lastIndex);
-          if (afterText) {
-            doc.fontSize(10)
-               .font('Helvetica')
-               .fillColor('#333333')
-               .text(afterText, { 
-                 align: 'left',
-                 lineGap: 1,
-                 continued: false
-               });
-            hasText = true;
-          }
-        }
-        
-        if (!hasText) {
-          // Fallback if no text was added
-          doc.fontSize(10)
-             .font('Helvetica')
-             .fillColor('#333333')
-             .text(trimmed.replace(/\*\*/g, ''), { 
-               align: 'left',
-               lineGap: 1.5
-             });
-        }
-        
-        doc.moveDown(0.3);
-      } else {
-        doc.fontSize(10)
-           .font('Helvetica')
-           .fillColor('#333333')
-           .text(trimmed, { 
-             align: 'left',
-             lineGap: 1.5,
-             paragraphGap: 3
-           });
-      }
-    }
+    doc.text(line);
   });
 
-  doc.moveDown(1.2);
-
-  // Signature Section - Compact
-  doc.fontSize(10)
-     .font('Helvetica-Bold')
-     .fillColor('#2c3e50')
-     .text('Signing Authority', { align: 'left' });
+  doc.moveDown();
+  doc.text('Signing Authority', { underline: true });
+  doc.font('Helvetica-Oblique').text(company?.signingAuthority?.name || '');
+  doc.font('Helvetica').text(company?.signingAuthority?.title || '');
   doc.moveDown(0.5);
-
-  // Try to load signature image
-  let signatureLoaded = false;
-  
-  // Try multiple paths for signature
-  const signaturePaths = [
-    path.join(__dirname, '../../frontend/public/assets/signature.png'),
-    path.join(process.cwd(), 'frontend/public/assets/signature.png'),
-    path.join(process.cwd(), 'public/assets/signature.png'),
-    path.join(__dirname, '../uploads/signature.png')
-  ];
-  
-  // Also check for signature URL in environment or company settings
-  const signatureUrl = process.env.SIGNATURE_IMAGE_URL || company?.signatureUrl;
-  
-  try {
-    // First try URL if available
-    if (signatureUrl) {
-      try {
-        const signatureResponse = await axios.get(signatureUrl, { responseType: 'arraybuffer' });
-        doc.image(signatureResponse.data, {
-          width: 100,
-          align: 'left'
-        });
-        doc.moveDown(0.2);
-        signatureLoaded = true;
-      } catch (urlError) {
-        console.warn('Unable to load signature from URL:', urlError.message);
-      }
-    }
-    
-    // If URL didn't work, try local file paths
-    if (!signatureLoaded) {
-      for (const signaturePath of signaturePaths) {
-        if (fs.existsSync(signaturePath)) {
-          doc.image(signaturePath, {
-            width: 100,
-            align: 'left'
-          });
-          doc.moveDown(0.2);
-          signatureLoaded = true;
-          break;
-        }
-      }
-    }
-  } catch (error) {
-    console.warn('Signature image not found, using text only:', error.message);
-  }
-
-  // Signing Authority Details - Compact
-  doc.fontSize(10)
-     .font('Helvetica')
-     .fillColor('#333333')
-     .text(company?.signingAuthority?.name || '', { align: 'left' });
-  doc.moveDown(0.1);
-  doc.fontSize(9)
-     .font('Helvetica')
-     .fillColor('#666666')
-     .text(company?.signingAuthority?.title || '', { align: 'left' });
-  doc.moveDown(0.3);
-  doc.fontSize(8)
-     .font('Helvetica-Oblique')
-     .fillColor('#888888')
-     .text(`Digitally signed by ${company?.signingAuthority?.name || ''}`, { align: 'left' });
+  doc.font('Helvetica-Oblique').text(`Digitally signed by ${company?.signingAuthority?.name || ''}`);
 
   return new Promise((resolve, reject) => {
     doc.on('end', () => resolve(Buffer.concat(chunks)));
     doc.on('error', reject);
     doc.end();
   });
+};
+
+const streamDocumentFile = async (res, document, disposition = 'inline') => {
+  const signedUrl = document.filePublicId
+    ? getSignedUrl(document.filePublicId, { resource_type: 'raw', type: 'upload' })
+    : document.fileUrl;
+  if (!signedUrl) {
+    return res.status(404).json({ message: 'Document file not available' });
+  }
+
+  const fileResponse = await axios.get(signedUrl, { responseType: 'arraybuffer' });
+  const contentType = fileResponse.headers['content-type'] || 'application/octet-stream';
+  let fileName = document.fileName || document.title || 'document';
+  if (!/\.[a-z0-9]+$/i.test(fileName) && contentType.includes('pdf')) {
+    fileName = `${fileName}.pdf`;
+  }
+  res.setHeader('Content-Type', contentType);
+  res.setHeader(
+    'Content-Disposition',
+    `${disposition}; filename="${fileName.replace(/\s+/g, '-')}"` 
+  );
+  return res.send(fileResponse.data);
 };
 
 const ensureSeedCompanies = async () => {
@@ -426,6 +210,23 @@ const sendHiringAdminCredentialsEmail = async (toEmail, companyName, adminEmail,
     </div>
   `;
   await mail(toEmail, `${companyName} Hiring Platform Credentials`, html, 'tabaltllp@gmail.com', 'Tabalt Hiring Pro');
+};
+
+const sendEmployeeCredentialsEmail = async (emails, companyName, employeeName, employeeEmail, employeePassword) => {
+  const html = `
+    <div style="font-family: Arial, sans-serif; color: #111;">
+      <h2>${companyName} Employee Access</h2>
+      <p>The employee profile for <strong>${employeeName}</strong> has been created.</p>
+      <p><strong>Employee Email:</strong> ${employeeEmail}</p>
+      <p><strong>Temporary Password / OTP:</strong> ${employeePassword}</p>
+      <p>Use these credentials to log into the Employee Dashboard.</p>
+    </div>
+  `;
+  await Promise.all(
+    emails.map((toEmail) =>
+      mail(toEmail, `${companyName} Employee Credentials`, html, 'tabaltllp@gmail.com', 'Tabalt Hiring Pro')
+    )
+  );
 };
 
 // Company onboarding (customer only)
@@ -511,9 +312,9 @@ router.get('/companies', async (req, res) => {
 // Employee signup (profile creation)
 router.post('/employee/signup', async (req, res) => {
   try {
-    const { name, email, password, companyId } = req.body;
-    if (!name || !email || !password || !companyId) {
-      return res.status(400).json({ message: 'Name, email, password, and company are required' });
+    const { name, email, companyId } = req.body;
+    if (!name || !email || !companyId) {
+      return res.status(400).json({ message: 'Name, email, and company are required' });
     }
 
     const company = await HiringCompany.findOne({ _id: companyId, onboardingComplete: true });
@@ -528,12 +329,25 @@ router.post('/employee/signup', async (req, res) => {
       return res.status(400).json({ message: 'Employee already exists. Please log in.' });
     }
 
+    const generatedPassword = crypto.randomBytes(4).toString('hex');
     const employee = await HiringEmployee.create({
       companyId: company._id,
       name: name.trim(),
       email: email.toLowerCase(),
-      password
+      password: generatedPassword
     });
+
+    const notificationEmails = [employee.email];
+    if (company.customerEmail) {
+      notificationEmails.push(company.customerEmail);
+    }
+    await sendEmployeeCredentialsEmail(
+      notificationEmails,
+      company.name,
+      employee.name,
+      employee.email,
+      generatedPassword
+    );
 
     const token = signHiringToken({ role: 'employee', companyId: employee.companyId, employeeId: employee._id });
     return res.json({
@@ -1132,6 +946,41 @@ router.put('/employee/profile', requireHiringAuth(['employee']), async (req, res
   }
 });
 
+router.post('/employee/profile/image', requireHiringAuth(['employee']), upload.fields([{ name: 'avatar', maxCount: 1 }]), uploadToCloudinary, async (req, res) => {
+  try {
+    const avatarFile = req.uploadedFiles?.find(file => file.type === 'avatar');
+    if (!avatarFile?.url) {
+      return res.status(400).json({ message: 'Profile image upload is required' });
+    }
+
+    const existing = await HiringEmployeeProfile.findOne({
+      employeeId: req.hiringUser.employeeId,
+      companyId: req.hiringUser.companyId
+    });
+    if (existing?.profileImagePublicId) {
+      try {
+        await deleteFromCloudinary(existing.profileImagePublicId, 'image');
+      } catch (error) {
+        console.error('Profile image delete error:', error);
+      }
+    }
+
+    const profile = await HiringEmployeeProfile.findOneAndUpdate(
+      { employeeId: req.hiringUser.employeeId, companyId: req.hiringUser.companyId },
+      {
+        employeeId: req.hiringUser.employeeId,
+        companyId: req.hiringUser.companyId,
+        profileImageUrl: avatarFile.url,
+        profileImagePublicId: avatarFile.publicId
+      },
+      { new: true, upsert: true, setDefaultsOnInsert: true }
+    );
+    res.json({ success: true, profile });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
 router.get('/employee/profile', requireHiringAuth(['employee']), async (req, res) => {
   try {
     const employee = await HiringEmployee.findOne({
@@ -1157,9 +1006,12 @@ router.post('/employee/documents', requireHiringAuth(['employee']), upload.field
     const doc = await HiringDocument.create({
       companyId: req.hiringUser.companyId,
       employeeId: req.hiringUser.employeeId,
-      title: title || docFile.name,
+      title: title || docFile.fileName,
       type: type || 'document',
       fileUrl: docFile.url,
+      filePublicId: docFile.publicId,
+      fileName: docFile.fileName || '',
+      fileMimeType: docFile.mimeType || '',
       content: docFile.url,
       createdBy: req.hiringUser.employeeId,
       createdByRole: 'employee'
@@ -1179,6 +1031,61 @@ router.get('/employee/documents', requireHiringAuth(['employee']), async (req, r
     res.json({ success: true, documents });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+router.get('/employee/documents/:id/view', requireHiringAuth(['employee']), async (req, res) => {
+  try {
+    const document = await HiringDocument.findOne({
+      _id: req.params.id,
+      companyId: req.hiringUser.companyId,
+      employeeId: req.hiringUser.employeeId
+    });
+    if (!document) return res.status(404).json({ message: 'Document not found' });
+    return await streamDocumentFile(res, document, 'inline');
+  } catch (error) {
+    return res.status(500).json({ message: 'Unable to load document' });
+  }
+});
+
+router.get('/employee/documents/:id/download', requireHiringAuth(['employee']), async (req, res) => {
+  try {
+    const document = await HiringDocument.findOne({
+      _id: req.params.id,
+      companyId: req.hiringUser.companyId,
+      employeeId: req.hiringUser.employeeId
+    });
+    if (!document) return res.status(404).json({ message: 'Document not found' });
+    return await streamDocumentFile(res, document, 'attachment');
+  } catch (error) {
+    return res.status(500).json({ message: 'Unable to download document' });
+  }
+});
+
+router.delete('/employee/documents/:id', requireHiringAuth(['employee']), async (req, res) => {
+  try {
+    const document = await HiringDocument.findOne({
+      _id: req.params.id,
+      companyId: req.hiringUser.companyId,
+      employeeId: req.hiringUser.employeeId
+    });
+    if (!document) return res.status(404).json({ message: 'Document not found' });
+    if (document.filePublicId) {
+      try {
+        await deleteFromCloudinary(document.filePublicId, 'raw');
+      } catch (error) {
+        console.error('Document delete error (raw):', error);
+      }
+      try {
+        await deleteFromCloudinary(document.filePublicId, 'image');
+      } catch (error) {
+        console.error('Document delete error (image):', error);
+      }
+    }
+    await document.deleteOne();
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ message: 'Unable to delete document' });
   }
 });
 
@@ -1213,6 +1120,162 @@ router.get('/company/employees/:id', requireHiringAuth(['company_admin']), async
     res.json({ success: true, employee, profile, timesheets, holidays, documents, offerLetters, expenses });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+router.get('/company/documents/:id/view', requireHiringAuth(['company_admin']), async (req, res) => {
+  try {
+    const document = await HiringDocument.findOne({
+      _id: req.params.id,
+      companyId: req.hiringUser.companyId
+    });
+    if (!document) return res.status(404).json({ message: 'Document not found' });
+    return await streamDocumentFile(res, document, 'inline');
+  } catch (error) {
+    return res.status(500).json({ message: 'Unable to load document' });
+  }
+});
+
+router.get('/company/documents/:id/download', requireHiringAuth(['company_admin']), async (req, res) => {
+  try {
+    const document = await HiringDocument.findOne({
+      _id: req.params.id,
+      companyId: req.hiringUser.companyId
+    });
+    if (!document) return res.status(404).json({ message: 'Document not found' });
+    return await streamDocumentFile(res, document, 'attachment');
+  } catch (error) {
+    return res.status(500).json({ message: 'Unable to download document' });
+  }
+});
+
+router.delete('/company/documents/:id', requireHiringAuth(['company_admin']), async (req, res) => {
+  try {
+    const document = await HiringDocument.findOne({
+      _id: req.params.id,
+      companyId: req.hiringUser.companyId
+    });
+    if (!document) return res.status(404).json({ message: 'Document not found' });
+    if (document.filePublicId) {
+      try {
+        await deleteFromCloudinary(document.filePublicId, 'raw');
+      } catch (error) {
+        console.error('Document delete error (raw):', error);
+      }
+      try {
+        await deleteFromCloudinary(document.filePublicId, 'image');
+      } catch (error) {
+        console.error('Document delete error (image):', error);
+      }
+    }
+    await document.deleteOne();
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ message: 'Unable to delete document' });
+  }
+});
+
+router.post('/employee/offer-letters/upload', requireHiringAuth(['employee']), upload.fields([{ name: 'offerLetter', maxCount: 1 }]), async (req, res) => {
+  try {
+    const offerFile = req.files?.offerLetter?.[0];
+    if (!offerFile) {
+      return res.status(400).json({ message: 'Offer letter PDF is required' });
+    }
+    if (!offerFile.mimetype.includes('pdf')) {
+      return res.status(400).json({ message: 'Offer letter must be a PDF file' });
+    }
+
+    const employee = await HiringEmployee.findById(req.hiringUser.employeeId);
+    if (!employee) return res.status(404).json({ message: 'Employee not found' });
+    const company = await HiringCompany.findById(req.hiringUser.companyId);
+    if (!company) return res.status(404).json({ message: 'Company not found' });
+
+    const uploadResult = await uploadRawToCloudinary(offerFile.buffer, {
+      folder: `hiring-pro/offer-letters/${company._id}`,
+      resource_type: 'image',
+      format: 'pdf',
+      public_id: `employee-offer-letter-${Date.now()}`,
+      content_type: 'application/pdf',
+      type: 'upload'
+    });
+
+    const offerLetter = await HiringOfferLetter.create({
+      companyId: company._id,
+      employeeId: employee._id,
+      candidateName: employee.name,
+      roleTitle: employee.designation || 'Employee',
+      startDate: new Date().toISOString().split('T')[0],
+      salaryPackage: 'N/A',
+      ctcBreakdown: '',
+      content: 'Uploaded offer letter',
+      fileUrl: uploadResult?.secure_url || null,
+      filePublicId: uploadResult?.public_id || null,
+      companyName: company.name || '',
+      companyLogoUrl: company.logoUrl || null,
+      signingAuthorityName: company.signingAuthority?.name || '',
+      signingAuthorityTitle: company.signingAuthority?.title || '',
+      status: 'uploaded',
+      createdBy: null
+    });
+
+    res.json({ success: true, offerLetter });
+  } catch (error) {
+    console.error('Employee offer letter upload error:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+router.get('/employee/offer-letters/:id/view', requireHiringAuth(['employee']), async (req, res) => {
+  try {
+    const offerLetter = await HiringOfferLetter.findOne({
+      _id: req.params.id,
+      companyId: req.hiringUser.companyId,
+      employeeId: req.hiringUser.employeeId
+    });
+    if (!offerLetter || !offerLetter.fileUrl) {
+      return res.status(404).json({ message: 'Offer letter not found' });
+    }
+
+    const signedUrl = offerLetter.filePublicId
+      ? getSignedDownloadUrl(offerLetter.filePublicId, 'pdf', { resource_type: 'image', type: 'upload' })
+      : offerLetter.fileUrl;
+
+    const fileResponse = await axios.get(signedUrl, { responseType: 'arraybuffer' });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      `inline; filename="offer-letter-${offerLetter.candidateName || 'document'}.pdf"`
+    );
+    return res.send(fileResponse.data);
+  } catch (error) {
+    return res.status(500).json({ message: 'Unable to load offer letter' });
+  }
+});
+
+router.get('/employee/offer-letters/:id/download', requireHiringAuth(['employee']), async (req, res) => {
+  try {
+    const offerLetter = await HiringOfferLetter.findOne({
+      _id: req.params.id,
+      companyId: req.hiringUser.companyId,
+      employeeId: req.hiringUser.employeeId
+    });
+    if (!offerLetter || !offerLetter.fileUrl) {
+      return res.status(404).json({ message: 'Offer letter not found' });
+    }
+
+    const signedUrl = offerLetter.filePublicId
+      ? getSignedDownloadUrl(offerLetter.filePublicId, 'pdf', { resource_type: 'image', type: 'upload' })
+      : offerLetter.fileUrl;
+
+    const fileResponse = await axios.get(signedUrl, { responseType: 'arraybuffer' });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="offer-letter-${offerLetter.candidateName || 'document'}.pdf"`
+    );
+    return res.send(fileResponse.data);
+  } catch (error) {
+    return res.status(500).json({ message: 'Unable to download offer letter' });
   }
 });
 
