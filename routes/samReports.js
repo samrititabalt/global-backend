@@ -100,6 +100,16 @@ Rules:
 - strategicPriorities should be an array of 3-5 bullet items.
 `;
 
+const buildCompanySuggestionsPrompt = ({ industry, sector, region }) => `
+Return a JSON array of 5 objects with keys: name, summary, why.
+Each summary should be 1-2 lines. Each why should be 1 line.
+
+Context:
+Industry: ${industry}
+Sector: ${sector}
+Region: ${region}
+`;
+
 const buildIndustryFallback = ({ industry, sector, yearRange }) => ({
   overview: `${industry} is experiencing a mix of consolidation and targeted innovation as operators rebalance portfolios.`,
   sectorInsights: `${sector} performance is driven by demand for efficiency, digital transformation, and resilient supply chains.`,
@@ -109,6 +119,17 @@ const buildIndustryFallback = ({ industry, sector, yearRange }) => ({
   opportunities: ['Adjacency expansion', 'Partnership ecosystems', 'Regional specialization'],
   forecastCommentary: `${yearRange} outlook indicates steady growth with selective breakout segments.`
 });
+
+const buildCompanySuggestionsFallback = ({ industry }) => {
+  const base = (industry || 'Insight').split(' ')[0] || 'Insight';
+  return [
+    { name: `${base} Horizon Labs`, summary: 'AI-enabled market intelligence platform.', why: 'Transforms decision speed across sectors.' },
+    { name: `${base} Pulse Systems`, summary: 'Operational optimisation suite for enterprise teams.', why: 'Delivers measurable productivity gains.' },
+    { name: `${base} Vertex Analytics`, summary: 'Sector benchmarking and competitive monitoring.', why: 'Raises visibility into market shifts.' },
+    { name: `${base} Nova Markets`, summary: 'Next-gen distribution and demand sensing.', why: 'Improves revenue resilience.' },
+    { name: `${base} Catalyst Partners`, summary: 'Strategic transformation advisory network.', why: 'Enables rapid scale and adoption.' }
+  ];
+};
 
 const buildCompanyFallback = ({ companyName, industry, sector }) => ({
   overview: `${companyName} is positioned within ${industry} and focuses on ${sector} opportunities.`,
@@ -297,6 +318,24 @@ router.post('/company-report', protect, authorizeProAccess, async (req, res) => 
   } catch (error) {
     console.error('Sam Reports company error:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+router.post('/company-suggestions', protect, authorizeProAccess, async (req, res) => {
+  try {
+    const { industry, sector, region } = req.body;
+    if (!industry || !sector || !region) {
+      return res.status(400).json({ message: 'Industry, sector, and region are required' });
+    }
+
+    const prompt = buildCompanySuggestionsPrompt({ industry, sector, region });
+    const response = await generateAIResponse(prompt, [], 'sam reports');
+    const parsed = parseJsonFromResponse(response);
+    const suggestions = Array.isArray(parsed) ? parsed : buildCompanySuggestionsFallback({ industry });
+
+    res.json({ success: true, suggestions });
+  } catch (error) {
+    res.json({ success: true, suggestions: buildCompanySuggestionsFallback({ industry: req.body.industry }) });
   }
 });
 
