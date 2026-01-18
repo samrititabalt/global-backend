@@ -12,6 +12,7 @@ const { ensureDefaultPlans, formatPlanForResponse } = require('../utils/planDefa
 const { notifyAgentsForNewChat } = require('../services/agentNotificationService');
 const { sendInitialAIGreeting } = require('../services/aiMessages');
 const { formatMessageForSamAI, mapMessagesForSamAI } = require('../utils/samAi');
+const { SAM_STUDIOS_SERVICES } = require('../constants/samStudiosServices');
 
 // @route   GET /api/customer/plans
 // @desc    Get all available plans
@@ -33,6 +34,22 @@ router.get('/services', protect, authorize('customer'), async (req, res) => {
   try {
     const services = await Service.find({ isActive: true });
     res.json({ success: true, services });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   GET /api/customer/sam-studios-access
+// @desc    Get Sam Studios access map for customer
+// @access  Private (Customer)
+router.get('/sam-studios-access', protect, authorize('customer'), async (req, res) => {
+  try {
+    const accessMap = Array.isArray(req.user?.samStudiosAccess) ? req.user.samStudiosAccess : [];
+    res.json({
+      success: true,
+      services: SAM_STUDIOS_SERVICES,
+      access: accessMap
+    });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
   }

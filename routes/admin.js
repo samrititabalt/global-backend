@@ -16,6 +16,7 @@ const ResumeBuilderUsage = require('../models/ResumeBuilderUsage');
 const Activity = require('../models/Activity');
 const VideoStatus = require('../models/VideoStatus');
 const CustomServiceRequest = require('../models/CustomServiceRequest');
+const { SAM_STUDIOS_SERVICES } = require('../constants/samStudiosServices');
 const { addTokens } = require('../services/tokenService');
 const generatePassword = require('../utils/generatePassword');
 const { sendCredentialsEmail } = require('../utils/sendEmail');
@@ -48,6 +49,58 @@ router.post('/services', protect, authorize('admin'), [
     });
 
     res.status(201).json({ success: true, service });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// Sam Studios Access CRM
+// @route   GET /api/admin/sam-studios-access
+// @desc    Get all customers with Sam Studios access map
+// @access  Private (Admin)
+router.get('/sam-studios-access', protect, authorize('admin'), async (req, res) => {
+  try {
+    const customers = await User.find({ role: 'customer' })
+      .select('name email planStatus samStudiosAccess')
+      .sort({ createdAt: -1 });
+
+    res.json({
+      success: true,
+      services: SAM_STUDIOS_SERVICES,
+      customers
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   PUT /api/admin/sam-studios-access/:customerId
+// @desc    Update a customer's access to a Sam Studios service
+// @access  Private (Admin)
+router.put('/sam-studios-access/:customerId', protect, authorize('admin'), async (req, res) => {
+  try {
+    const { serviceKey, enabled } = req.body;
+    if (!serviceKey || typeof enabled !== 'boolean') {
+      return res.status(400).json({ message: 'serviceKey and enabled are required' });
+    }
+
+    const customer = await User.findOne({ _id: req.params.customerId, role: 'customer' });
+    if (!customer) {
+      return res.status(404).json({ message: 'Customer not found' });
+    }
+
+    const accessList = Array.isArray(customer.samStudiosAccess) ? customer.samStudiosAccess : [];
+    const existing = accessList.find((entry) => entry.key === serviceKey);
+    if (existing) {
+      existing.enabled = enabled;
+      existing.updatedAt = new Date();
+    } else {
+      accessList.push({ key: serviceKey, enabled, updatedAt: new Date() });
+    }
+    customer.samStudiosAccess = accessList;
+    await customer.save();
+
+    res.json({ success: true, access: customer.samStudiosAccess });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
   }

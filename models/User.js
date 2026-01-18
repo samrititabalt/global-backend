@@ -155,6 +155,11 @@ const userSchema = new mongoose.Schema({
     type: Date,
     default: null
   },
+  samStudiosAccess: [{
+    key: { type: String, required: true },
+    enabled: { type: Boolean, default: false },
+    updatedAt: { type: Date, default: Date.now }
+  }],
   createdAt: {
     type: Date,
     default: Date.now
