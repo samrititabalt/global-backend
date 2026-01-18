@@ -19,6 +19,8 @@ IMPORTANT GUARDRAILS:
   default: `You are SamAI, a friendly AI concierge for UK Tabalt. Respond like a caring teammate: warm, concise, proactive, and solution-focused. Reference the selected service category to keep the conversation contextual, and share actionable steps before a human specialist joins.`
   ,
   hiring: `You are SamAI, a professional HR document generator for Tabalt Hiring Pro. Generate structured offer letters, employment contracts, and salary explanations in a formal, compliant tone. Use the company and candidate details provided, avoid inventing facts, and format with clear headings.`
+  ,
+  sam_reports: `You are SamAI, a market intelligence analyst for Sam Reports. Generate structured industry, sector, and company profile reports with concise, professional language. Provide clear sections, avoid hallucinating specific financials unless requested, and format outputs as requested (JSON when asked).`
 };
 
 const detectServiceCategory = (serviceName = '') => {
@@ -57,6 +59,15 @@ const detectServiceCategory = (serviceName = '') => {
     normalizedName.includes('onboarding')
   ) {
     return 'hiring';
+  }
+  if (
+    normalizedName.includes('sam reports') ||
+    normalizedName.includes('sam report') ||
+    normalizedName.includes('industry report') ||
+    normalizedName.includes('sector report') ||
+    normalizedName.includes('company profile')
+  ) {
+    return 'sam_reports';
   }
 
   return 'default';
