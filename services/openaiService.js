@@ -202,8 +202,129 @@ const generateAIResponse = async (userMessage, chatHistory, serviceName) => {
   }
 };
 
+const defaultSalaryComponents = [
+  { key: 'basic_salary', label: 'Basic Salary', category: 'earning', description: 'Core salary component before allowances.' },
+  { key: 'house_rent_allowance', label: 'House Rent Allowance (HRA)', category: 'earning', description: 'Housing support aligned to local norms.' },
+  { key: 'bonus', label: 'Bonus', category: 'earning', description: 'Performance-linked variable pay.' },
+  { key: 'provident_fund', label: 'Provident Fund (PF)', category: 'deduction', description: 'Retirement contribution or pension deductions.' },
+  { key: 'gratuity', label: 'Gratuity', category: 'deduction', description: 'Statutory gratuity contribution.' },
+  { key: 'special_allowance', label: 'Special Allowance', category: 'earning', description: 'Flexible allowance to balance total pay.' },
+  { key: 'medical_allowance', label: 'Medical Allowance', category: 'earning', description: 'Healthcare or medical benefit allowance.' },
+  { key: 'professional_tax', label: 'Professional Tax', category: 'deduction', description: 'Local professional or payroll tax deduction.' }
+];
+
+const buildSalaryTemplatePrompt = (currency) => `
+You are generating a salary breakup template for hiring teams.
+Return ONLY valid JSON with the following schema:
+{
+  "currency": "${currency}",
+  "components": [
+    {
+      "key": "basic_salary",
+      "label": "Basic Salary",
+      "amount": 0,
+      "description": "Short description",
+      "category": "earning"
+    }
+  ],
+  "totalCtc": 0,
+  "netPay": 0
+}
+
+Rules:
+- Use realistic salary values for ${currency} aligned to US, UK, and India norms.
+- Include ALL of these components: Basic Salary, House Rent Allowance (HRA), Bonus, Provident Fund (PF), Gratuity, Special Allowance, Medical Allowance, Professional Tax.
+- Use "earning" or "deduction" for category.
+- totalCtc must equal the sum of earning components.
+- netPay must equal totalCtc minus the sum of deduction components.
+- Provide short, clear descriptions per component.
+- Return JSON only, no markdown or extra text.
+`.trim();
+
+const parseJsonFromText = (text) => {
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    const match = text.match(/\{[\s\S]*\}/);
+    if (!match) return null;
+    try {
+      return JSON.parse(match[0]);
+    } catch (innerError) {
+      return null;
+    }
+  }
+};
+
+const buildFallbackSalaryTemplate = (currency = 'USD') => {
+  const baseTotals = { USD: 90000, GBP: 65000, INR: 1800000 };
+  const totalCtc = baseTotals[currency] || baseTotals.USD;
+  const earnings = [
+    { key: 'basic_salary', label: 'Basic Salary', percentage: 0.5 },
+    { key: 'house_rent_allowance', label: 'House Rent Allowance (HRA)', percentage: 0.2 },
+    { key: 'bonus', label: 'Bonus', percentage: 0.1 },
+    { key: 'special_allowance', label: 'Special Allowance', percentage: 0.1 },
+    { key: 'medical_allowance', label: 'Medical Allowance', percentage: 0.05 }
+  ];
+  const deductions = [
+    { key: 'provident_fund', label: 'Provident Fund (PF)', percentage: 0.05 },
+    { key: 'gratuity', label: 'Gratuity', percentage: 0.03 },
+    { key: 'professional_tax', label: 'Professional Tax', percentage: 0.01 }
+  ];
+
+  const components = defaultSalaryComponents.map((component) => {
+    const earningMatch = earnings.find((item) => item.key === component.key);
+    const deductionMatch = deductions.find((item) => item.key === component.key);
+    let amount = 0;
+    if (earningMatch) amount = Math.round(totalCtc * earningMatch.percentage);
+    if (deductionMatch) amount = Math.round(totalCtc * deductionMatch.percentage);
+    return { ...component, amount };
+  });
+
+  const totalDeductions = components
+    .filter((item) => item.category === 'deduction')
+    .reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
+
+  return {
+    currency,
+    components,
+    totalCtc,
+    netPay: totalCtc - totalDeductions
+  };
+};
+
+const generateSalaryTemplate = async (currency = 'USD') => {
+  const client = getOpenAIClient();
+  if (!client) {
+    return buildFallbackSalaryTemplate(currency);
+  }
+
+  try {
+    const completion = await client.chat.completions.create({
+      model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+      messages: [
+        { role: 'system', content: 'You are a payroll analyst generating salary breakup templates.' },
+        { role: 'user', content: buildSalaryTemplatePrompt(currency) }
+      ],
+      temperature: numberFromEnv(process.env.OPENAI_TEMPERATURE, 0.4),
+      max_tokens: 700
+    });
+
+    const content = completion.choices?.[0]?.message?.content?.trim();
+    const parsed = parseJsonFromText(content);
+    if (parsed?.components?.length) {
+      return parsed;
+    }
+    return buildFallbackSalaryTemplate(currency);
+  } catch (error) {
+    console.error('Salary template generation error:', error?.message);
+    return buildFallbackSalaryTemplate(currency);
+  }
+};
+
 module.exports = {
   generateAIResponse,
-  getServicePrompt
+  getServicePrompt,
+  generateSalaryTemplate
 };
 

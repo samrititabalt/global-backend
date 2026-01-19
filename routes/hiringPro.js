@@ -18,7 +18,7 @@ const HiringCompanyAdmin = require('../models/HiringCompanyAdmin');
 const HiringEmployee = require('../models/HiringEmployee');
 const HiringOfferLetter = require('../models/HiringOfferLetter');
 const User = require('../models/User');
-const { generateAIResponse } = require('../services/openaiService');
+const { generateAIResponse, generateSalaryTemplate } = require('../services/openaiService');
 const { mail } = require('../utils/sendEmail');
 const HiringHoliday = require('../models/HiringHoliday');
 const HiringTimesheet = require('../models/HiringTimesheet');
@@ -68,6 +68,31 @@ const sanitizeOfferContent = (content = '') => {
     })
     .join('\n')
     .trim();
+};
+
+const normalizeSalaryBreakup = (payload = {}) => {
+  const currency = payload.currency || 'USD';
+  const components = Array.isArray(payload.components) ? payload.components : [];
+  const sanitizedComponents = components.map((component) => ({
+    key: component.key || '',
+    label: component.label || '',
+    amount: Number(component.amount) || 0,
+    description: component.description || '',
+    category: component.category === 'deduction' ? 'deduction' : 'earning'
+  }));
+  const totalCtc = sanitizedComponents
+    .filter((item) => item.category === 'earning')
+    .reduce((sum, item) => sum + item.amount, 0);
+  const totalDeductions = sanitizedComponents
+    .filter((item) => item.category === 'deduction')
+    .reduce((sum, item) => sum + item.amount, 0);
+
+  return {
+    currency,
+    components: sanitizedComponents,
+    totalCtc,
+    netPay: totalCtc - totalDeductions
+  };
 };
 
 const buildOfferLetterPdfBuffer = async (company, offer, content) => {
@@ -1091,6 +1116,19 @@ router.delete('/employee/documents/:id', requireHiringAuth(['employee']), async 
 
 router.get('/employee/salary-breakdown', requireHiringAuth(['employee']), async (req, res) => {
   try {
+    const profile = await HiringEmployeeProfile.findOne({
+      companyId: req.hiringUser.companyId,
+      employeeId: req.hiringUser.employeeId
+    });
+    if (profile?.salaryBreakup?.components?.length) {
+      return res.json({
+        success: true,
+        salaryBreakup: profile.salaryBreakup,
+        salaryUpdatedBy: profile.salaryUpdatedBy,
+        salaryUpdatedAt: profile.salaryUpdatedAt
+      });
+    }
+
     const offerLetter = await HiringOfferLetter.findOne({
       companyId: req.hiringUser.companyId,
       employeeId: req.hiringUser.employeeId
@@ -1118,6 +1156,71 @@ router.get('/company/employees/:id', requireHiringAuth(['company_admin']), async
       HiringExpense.find({ companyId: req.hiringUser.companyId, employeeId: employee._id })
     ]);
     res.json({ success: true, employee, profile, timesheets, holidays, documents, offerLetters, expenses });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+router.post('/company/employees/:id/salary-breakup/generate', requireHiringAuth(['company_admin']), async (req, res) => {
+  try {
+    const employee = await HiringEmployee.findOne({
+      _id: req.params.id,
+      companyId: req.hiringUser.companyId
+    });
+    if (!employee) return res.status(404).json({ message: 'Employee not found' });
+
+    const currency = req.body?.currency || 'USD';
+    const template = await generateSalaryTemplate(currency);
+    const normalized = normalizeSalaryBreakup(template);
+    res.json({ success: true, salaryBreakup: normalized });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+router.put('/company/employees/:id/salary-breakup', requireHiringAuth(['company_admin']), async (req, res) => {
+  try {
+    const employee = await HiringEmployee.findOne({
+      _id: req.params.id,
+      companyId: req.hiringUser.companyId
+    });
+    if (!employee) return res.status(404).json({ message: 'Employee not found' });
+
+    const normalized = normalizeSalaryBreakup(req.body?.salaryBreakup || {});
+    const profile = await HiringEmployeeProfile.findOneAndUpdate(
+      { employeeId: employee._id, companyId: req.hiringUser.companyId },
+      {
+        employeeId: employee._id,
+        companyId: req.hiringUser.companyId,
+        salaryBreakup: normalized,
+        salaryUpdatedBy: {
+          id: req.hiringUser.adminId || req.hiringUser.userId || req.hiringUser.companyId,
+          name: req.hiringUser.name || 'Company Admin',
+          role: 'company_admin'
+        },
+        salaryUpdatedAt: new Date()
+      },
+      { new: true, upsert: true, setDefaultsOnInsert: true }
+    );
+
+    const [timesheets, holidays, documents, offerLetters, expenses] = await Promise.all([
+      HiringTimesheet.find({ companyId: req.hiringUser.companyId, employeeId: employee._id }),
+      HiringHoliday.find({ companyId: req.hiringUser.companyId, employeeId: employee._id }),
+      HiringDocument.find({ companyId: req.hiringUser.companyId, employeeId: employee._id }),
+      HiringOfferLetter.find({ companyId: req.hiringUser.companyId, employeeId: employee._id }),
+      HiringExpense.find({ companyId: req.hiringUser.companyId, employeeId: employee._id })
+    ]);
+
+    res.json({
+      success: true,
+      employee,
+      profile,
+      timesheets,
+      holidays,
+      documents,
+      offerLetters,
+      expenses
+    });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
   }
