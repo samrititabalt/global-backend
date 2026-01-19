@@ -273,7 +273,8 @@ const buildDocumentPdfBuffer = async (company, document, content) => {
     ? sanitizedContent.split(/=== Page \d+ ===/i).map((page) => page.trim()).filter(Boolean)
     : [sanitizedContent];
 
-  pageChunks.forEach((pageContent, pageIndex) => {
+  for (let pageIndex = 0; pageIndex < pageChunks.length; pageIndex += 1) {
+    const pageContent = pageChunks[pageIndex];
     if (pageIndex > 0) {
       doc.addPage();
     }
@@ -357,7 +358,7 @@ const buildDocumentPdfBuffer = async (company, document, content) => {
         align: 'right'
       });
     }
-  });
+  }
 
   return new Promise((resolve, reject) => {
     doc.on('end', () => resolve(Buffer.concat(chunks)));
