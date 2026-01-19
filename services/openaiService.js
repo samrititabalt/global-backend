@@ -325,10 +325,10 @@ const generateSalaryTemplate = async (currency = 'USD') => {
 const defaultExpenseTemplateFields = [
   { key: 'particulars', label: 'Particulars', required: true, order: 1 },
   { key: 'invoice_number', label: 'Invoice Number', required: true, order: 2 },
-  { key: 'bill_number', label: 'Bill Number', required: true, order: 3 },
-  { key: 'name', label: 'Name', required: true, order: 4 },
-  { key: 'expense_type', label: 'Type of Expense', required: true, order: 5 },
-  { key: 'amount', label: 'Amount', required: true, order: 6 },
+  { key: 'name', label: 'Name', required: true, order: 3 },
+  { key: 'expense_type', label: 'Type of Expense', required: true, order: 4 },
+  { key: 'amount', label: 'Amount', required: true, order: 5 },
+  { key: 'date', label: 'Date', required: true, order: 6 },
   { key: 'remarks', label: 'Remarks', required: true, order: 7 }
 ];
 
@@ -342,7 +342,7 @@ Return ONLY valid JSON with this schema:
 }
 
 Rules:
-- Include these fixed fields in order: Particulars, Invoice Number, Bill Number, Name, Type of Expense, Amount, Remarks.
+- Include these fixed fields in order: Particulars, Invoice Number, Name, Type of Expense, Amount, Date, Remarks.
 - You may add optional fields if needed, but keep the fixed fields included.
 - Keep keys in snake_case and stable.
 - Return JSON only.
@@ -402,10 +402,10 @@ Return ONLY valid JSON in this schema:
   "fields": {
     "particulars": "string or null",
     "invoice_number": "string or null",
-    "bill_number": "string or null",
     "name": "string or null",
     "expense_type": "string or null",
     "amount": "string or null",
+    "date": "string or null",
     "remarks": "string or null"
   },
   "extraFields": [
@@ -415,6 +415,7 @@ Return ONLY valid JSON in this schema:
 
 Rules:
 - Use null for missing fields.
+- Classify expense_type into one of: Travel, Food & Drinks, Internet/Phone, Visa, Others.
 - Include any extra fields found in the document under extraFields.
 - If nothing is found, return all fields as null.
   `.trim();

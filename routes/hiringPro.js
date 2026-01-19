@@ -97,6 +97,16 @@ const normalizeSalaryBreakup = (payload = {}) => {
 };
 
 const normalizeExpenseTemplateFields = (fields = []) => {
+  const fixedFields = [
+    { key: 'particulars', label: 'Particulars', required: true, order: 1 },
+    { key: 'invoice_number', label: 'Invoice Number', required: true, order: 2 },
+    { key: 'name', label: 'Name', required: true, order: 3 },
+    { key: 'expense_type', label: 'Type of Expense', required: true, order: 4 },
+    { key: 'amount', label: 'Amount', required: true, order: 5 },
+    { key: 'date', label: 'Date', required: true, order: 6 },
+    { key: 'remarks', label: 'Remarks', required: true, order: 7 }
+  ];
+
   const normalized = fields
     .filter((field) => field && (field.key || field.label))
     .map((field, index) => {
@@ -113,14 +123,22 @@ const normalizeExpenseTemplateFields = (fields = []) => {
         order: Number.isFinite(Number(field.order)) ? Number(field.order) : index + 1
       };
     })
-    .filter((field) => field.key);
+    .filter((field) => field.key)
+    .filter((field) => field.key !== 'bill_number');
 
-  const hasRemarks = normalized.some((field) => field.key === 'remarks');
-  if (!hasRemarks) {
-    normalized.push({ key: 'remarks', label: 'Remarks', required: true, order: normalized.length + 1 });
-  }
+  const merged = fixedFields.map((fixed) => {
+    const existing = normalized.find((field) => field.key === fixed.key);
+    return existing ? { ...fixed, label: existing.label || fixed.label } : fixed;
+  });
 
-  return normalized.sort((a, b) => a.order - b.order);
+  const extras = normalized.filter((field) => !fixedFields.some((fixed) => fixed.key === field.key));
+  const allFields = [...merged, ...extras.map((field, index) => ({
+    ...field,
+    required: field.required || false,
+    order: fixedFields.length + index + 1
+  }))];
+
+  return allFields.sort((a, b) => a.order - b.order);
 };
 
 const buildExpenseValues = (templateFields = [], extracted = {}, extraFields = []) => {
