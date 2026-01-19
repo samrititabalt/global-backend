@@ -322,9 +322,150 @@ const generateSalaryTemplate = async (currency = 'USD') => {
   }
 };
 
+const defaultExpenseTemplateFields = [
+  { key: 'particulars', label: 'Particulars', required: true, order: 1 },
+  { key: 'invoice_number', label: 'Invoice Number', required: true, order: 2 },
+  { key: 'bill_number', label: 'Bill Number', required: true, order: 3 },
+  { key: 'name', label: 'Name', required: true, order: 4 },
+  { key: 'expense_type', label: 'Type of Expense', required: true, order: 5 },
+  { key: 'amount', label: 'Amount', required: true, order: 6 },
+  { key: 'remarks', label: 'Remarks', required: true, order: 7 }
+];
+
+const buildExpenseTemplatePrompt = () => `
+You are generating a standard employee expense template.
+Return ONLY valid JSON with this schema:
+{
+  "fields": [
+    { "key": "particulars", "label": "Particulars", "required": true, "order": 1 }
+  ]
+}
+
+Rules:
+- Include these fixed fields in order: Particulars, Invoice Number, Bill Number, Name, Type of Expense, Amount, Remarks.
+- You may add optional fields if needed, but keep the fixed fields included.
+- Keep keys in snake_case and stable.
+- Return JSON only.
+`.trim();
+
+const parseJsonWithFallback = (text) => {
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    const match = text.match(/\{[\s\S]*\}/);
+    if (!match) return null;
+    try {
+      return JSON.parse(match[0]);
+    } catch (innerError) {
+      return null;
+    }
+  }
+};
+
+const generateExpenseTemplate = async () => {
+  const client = getOpenAIClient();
+  if (!client) {
+    return { fields: defaultExpenseTemplateFields };
+  }
+
+  try {
+    const completion = await client.chat.completions.create({
+      model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+      messages: [
+        { role: 'system', content: 'You create structured templates for expense reporting.' },
+        { role: 'user', content: buildExpenseTemplatePrompt() }
+      ],
+      temperature: numberFromEnv(process.env.OPENAI_TEMPERATURE, 0.2),
+      max_tokens: 500
+    });
+    const content = completion.choices?.[0]?.message?.content?.trim();
+    const parsed = parseJsonWithFallback(content);
+    if (parsed?.fields?.length) {
+      return parsed;
+    }
+    return { fields: defaultExpenseTemplateFields };
+  } catch (error) {
+    console.error('Expense template generation error:', error?.message);
+    return { fields: defaultExpenseTemplateFields };
+  }
+};
+
+const buildExpenseExtractionPrompt = (fields = []) => {
+  const fieldKeys = fields.map((field) => field.key).filter(Boolean);
+  return `
+Extract the following fields from the invoice/receipt:
+${fieldKeys.join(', ')}
+
+Return ONLY valid JSON in this schema:
+{
+  "fields": {
+    "particulars": "string or null",
+    "invoice_number": "string or null",
+    "bill_number": "string or null",
+    "name": "string or null",
+    "expense_type": "string or null",
+    "amount": "string or null",
+    "remarks": "string or null"
+  },
+  "extraFields": [
+    { "label": "GST", "value": "string" }
+  ]
+}
+
+Rules:
+- Use null for missing fields.
+- Include any extra fields found in the document under extraFields.
+- If nothing is found, return all fields as null.
+  `.trim();
+};
+
+const extractExpenseFieldsFromImage = async (imageBase64, fields = []) => {
+  const client = getOpenAIClient();
+  if (!client) {
+    return { fields: {}, extraFields: [] };
+  }
+
+  try {
+    const model = process.env.OPENAI_VISION_MODEL || process.env.OPENAI_MODEL || 'gpt-4o-mini';
+    const requestConfig = {
+      model,
+      messages: [
+        { role: 'system', content: buildExpenseExtractionPrompt(fields) },
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: 'Extract expense data and return JSON only.' },
+            { type: 'image_url', image_url: { url: imageBase64, detail: 'high' } }
+          ]
+        }
+      ],
+      temperature: 0.1,
+      max_tokens: 700
+    };
+
+    if (model.includes('gpt-4o') || model.includes('gpt-4-turbo')) {
+      requestConfig.response_format = { type: 'json_object' };
+    }
+
+    const completion = await client.chat.completions.create(requestConfig);
+    const content = completion.choices?.[0]?.message?.content?.trim();
+    const parsed = parseJsonWithFallback(content);
+    if (parsed) {
+      return parsed;
+    }
+    return { fields: {}, extraFields: [] };
+  } catch (error) {
+    console.error('Expense extraction error:', error?.message);
+    return { fields: {}, extraFields: [] };
+  }
+};
+
 module.exports = {
   generateAIResponse,
   getServicePrompt,
-  generateSalaryTemplate
+  generateSalaryTemplate,
+  generateExpenseTemplate,
+  extractExpenseFieldsFromImage
 };
 

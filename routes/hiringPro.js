@@ -18,13 +18,14 @@ const HiringCompanyAdmin = require('../models/HiringCompanyAdmin');
 const HiringEmployee = require('../models/HiringEmployee');
 const HiringOfferLetter = require('../models/HiringOfferLetter');
 const User = require('../models/User');
-const { generateAIResponse, generateSalaryTemplate } = require('../services/openaiService');
+const { generateAIResponse, generateSalaryTemplate, generateExpenseTemplate, extractExpenseFieldsFromImage } = require('../services/openaiService');
 const { mail } = require('../utils/sendEmail');
 const HiringHoliday = require('../models/HiringHoliday');
 const HiringTimesheet = require('../models/HiringTimesheet');
 const HiringDocument = require('../models/HiringDocument');
 const HiringEmployeeProfile = require('../models/HiringEmployeeProfile');
 const HiringExpense = require('../models/HiringExpense');
+const HiringExpenseTemplate = require('../models/HiringExpenseTemplate');
 
 const HIRING_TOKEN_TYPE = 'hiring-pro';
 const HIRING_SUPERADMIN_EMAIL = process.env.HIRING_SUPERADMIN_EMAIL || 'superadmin@tabalt.co.uk';
@@ -93,6 +94,87 @@ const normalizeSalaryBreakup = (payload = {}) => {
     totalCtc,
     netPay: totalCtc - totalDeductions
   };
+};
+
+const normalizeExpenseTemplateFields = (fields = []) => {
+  const normalized = fields
+    .filter((field) => field && (field.key || field.label))
+    .map((field, index) => {
+      const key = (field.key || field.label || '')
+        .toString()
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '_')
+        .replace(/^_+|_+$/g, '');
+      return {
+        key,
+        label: field.label || field.key || '',
+        required: Boolean(field.required),
+        order: Number.isFinite(Number(field.order)) ? Number(field.order) : index + 1
+      };
+    })
+    .filter((field) => field.key);
+
+  const hasRemarks = normalized.some((field) => field.key === 'remarks');
+  if (!hasRemarks) {
+    normalized.push({ key: 'remarks', label: 'Remarks', required: true, order: normalized.length + 1 });
+  }
+
+  return normalized.sort((a, b) => a.order - b.order);
+};
+
+const buildExpenseValues = (templateFields = [], extracted = {}, extraFields = []) => {
+  const values = templateFields.map((field) => {
+    if (field.key === 'remarks') {
+      const remarksFromExtras = extraFields
+        .map((item) => `${item.label || 'Field'}: ${item.value || 'Data Missing'}`)
+        .join(' | ');
+      return {
+        key: field.key,
+        label: field.label,
+        value: remarksFromExtras || 'Data Missing'
+      };
+    }
+    const value = extracted[field.key];
+    return {
+      key: field.key,
+      label: field.label,
+      value: value ? String(value) : 'Data Missing'
+    };
+  });
+
+  return values;
+};
+
+const buildExpensePdfBuffer = async (expense) => {
+  const doc = new PDFDocument({ size: 'A4', margin: 50 });
+  const chunks = [];
+  doc.on('data', (chunk) => chunks.push(chunk));
+
+  doc.fontSize(18).text('Expense Sheet', { underline: true });
+  doc.moveDown();
+  doc.fontSize(12).text(`Employee: ${expense.employeeId?.name || 'Employee'}`);
+  doc.text(`Status: ${expense.status}`);
+  doc.text(`Submitted: ${expense.submittedAt ? new Date(expense.submittedAt).toLocaleString() : '—'}`);
+  doc.moveDown();
+
+  const entries = expense.values || [];
+  entries.forEach((entry) => {
+    doc.fontSize(11).text(`${entry.label}: ${entry.value}`);
+  });
+
+  doc.moveDown();
+  doc.fontSize(12).text(`Amount: ${expense.amount || 0}`);
+  doc.moveDown();
+  if (expense.adminComment) {
+    doc.fontSize(11).text(`Admin Comment: ${expense.adminComment}`);
+  }
+
+  return new Promise((resolve, reject) => {
+    doc.on('end', () => resolve(Buffer.concat(chunks)));
+    doc.on('error', reject);
+    doc.end();
+  });
 };
 
 const buildOfferLetterPdfBuffer = async (company, offer, content) => {
@@ -883,28 +965,207 @@ router.put('/company/holidays/:id', requireHiringAuth(['company_admin']), async 
   }
 });
 
-// Employee submit expense (future-ready)
+router.get('/company/expense-template', requireHiringAuth(['company_admin']), async (req, res) => {
+  try {
+    let template = await HiringExpenseTemplate.findOne({ companyId: req.hiringUser.companyId });
+    if (!template) {
+      const generated = await generateExpenseTemplate();
+      const fields = normalizeExpenseTemplateFields(generated.fields || []);
+      template = await HiringExpenseTemplate.create({
+        companyId: req.hiringUser.companyId,
+        fields,
+        createdBy: {
+          id: req.hiringUser.adminId || req.hiringUser.userId || req.hiringUser.companyId,
+          name: req.hiringUser.name || 'Company Admin',
+          email: req.hiringUser.email || ''
+        }
+      });
+    }
+    res.json({ success: true, template });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+router.post('/company/expense-template/generate', requireHiringAuth(['company_admin']), async (req, res) => {
+  try {
+    const generated = await generateExpenseTemplate();
+    const fields = normalizeExpenseTemplateFields(generated.fields || []);
+    const template = await HiringExpenseTemplate.findOneAndUpdate(
+      { companyId: req.hiringUser.companyId },
+      {
+        companyId: req.hiringUser.companyId,
+        fields,
+        createdBy: {
+          id: req.hiringUser.adminId || req.hiringUser.userId || req.hiringUser.companyId,
+          name: req.hiringUser.name || 'Company Admin',
+          email: req.hiringUser.email || ''
+        }
+      },
+      { new: true, upsert: true, setDefaultsOnInsert: true }
+    );
+    res.json({ success: true, template });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+router.put('/company/expense-template', requireHiringAuth(['company_admin']), async (req, res) => {
+  try {
+    const fields = normalizeExpenseTemplateFields(req.body?.fields || []);
+    const template = await HiringExpenseTemplate.findOneAndUpdate(
+      { companyId: req.hiringUser.companyId },
+      {
+        companyId: req.hiringUser.companyId,
+        fields,
+        createdBy: {
+          id: req.hiringUser.adminId || req.hiringUser.userId || req.hiringUser.companyId,
+          name: req.hiringUser.name || 'Company Admin',
+          email: req.hiringUser.email || ''
+        }
+      },
+      { new: true, upsert: true, setDefaultsOnInsert: true }
+    );
+    res.json({ success: true, template });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+router.get('/employee/expense-template', requireHiringAuth(['employee']), async (req, res) => {
+  try {
+    let template = await HiringExpenseTemplate.findOne({ companyId: req.hiringUser.companyId });
+    if (!template) {
+      const generated = await generateExpenseTemplate();
+      const fields = normalizeExpenseTemplateFields(generated.fields || []);
+      template = await HiringExpenseTemplate.create({
+        companyId: req.hiringUser.companyId,
+        fields,
+        createdBy: { name: 'System' }
+      });
+    }
+    res.json({ success: true, template });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+router.post('/employee/expenses/extract', requireHiringAuth(['employee']), upload.fields([{ name: 'invoice', maxCount: 1 }]), async (req, res) => {
+  try {
+    const invoiceFile = req.files?.invoice?.[0];
+    if (!invoiceFile) {
+      return res.status(400).json({ message: 'Invoice file is required' });
+    }
+
+    let template = await HiringExpenseTemplate.findOne({ companyId: req.hiringUser.companyId });
+    if (!template) {
+      const generated = await generateExpenseTemplate();
+      const fields = normalizeExpenseTemplateFields(generated.fields || []);
+      template = await HiringExpenseTemplate.create({
+        companyId: req.hiringUser.companyId,
+        fields,
+        createdBy: { name: 'System' }
+      });
+    }
+
+    const isImage = invoiceFile.mimetype.startsWith('image/');
+    const uploadResult = await uploadRawToCloudinary(invoiceFile.buffer, {
+      folder: `hiring-pro/expenses/${req.hiringUser.companyId}/invoices`,
+      resource_type: 'image',
+      format: isImage ? undefined : 'pdf',
+      public_id: `invoice-${Date.now()}`,
+      content_type: invoiceFile.mimetype,
+      type: 'upload'
+    });
+
+    let imageBase64 = '';
+    if (isImage) {
+      imageBase64 = `data:${invoiceFile.mimetype};base64,${invoiceFile.buffer.toString('base64')}`;
+    } else {
+      const previewUrl = getSignedUrl(uploadResult.public_id, {
+        resource_type: 'image',
+        format: 'png',
+        page: 1,
+        type: 'upload'
+      });
+      const previewResponse = await axios.get(previewUrl, { responseType: 'arraybuffer' });
+      imageBase64 = `data:image/png;base64,${Buffer.from(previewResponse.data).toString('base64')}`;
+    }
+
+    const extraction = await extractExpenseFieldsFromImage(imageBase64, template.fields || []);
+    const extractedFields = extraction.fields || {};
+    const extraFields = extraction.extraFields || [];
+    const values = buildExpenseValues(template.fields || [], extractedFields, extraFields);
+
+    res.json({
+      success: true,
+      template,
+      values,
+      invoice: {
+        url: uploadResult.secure_url,
+        publicId: uploadResult.public_id,
+        fileName: invoiceFile.originalname,
+        mimeType: invoiceFile.mimetype
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Unable to extract expense data', error: error.message });
+  }
+});
+
 router.post('/employee/expenses', requireHiringAuth(['employee']), async (req, res) => {
   try {
-    const { amount, description } = req.body;
-    if (!amount || !description) {
-      return res.status(400).json({ message: 'Amount and description are required' });
+    const { values = [], invoice = {} } = req.body || {};
+    let template = await HiringExpenseTemplate.findOne({ companyId: req.hiringUser.companyId });
+    if (!template) {
+      const generated = await generateExpenseTemplate();
+      const fields = normalizeExpenseTemplateFields(generated.fields || []);
+      template = await HiringExpenseTemplate.create({
+        companyId: req.hiringUser.companyId,
+        fields,
+        createdBy: { name: 'System' }
+      });
     }
+
+    const templateFields = normalizeExpenseTemplateFields(template.fields || []);
+    const valueMap = new Map(values.map((item) => [item.key, item.value]));
+    const normalizedValues = templateFields.map((field) => ({
+      key: field.key,
+      label: field.label,
+      value: valueMap.get(field.key) || 'Data Missing'
+    }));
+
+    const amountValue = valueMap.get('amount') || '';
+    const numericAmount = Number(String(amountValue).replace(/[^0-9.-]/g, '')) || 0;
+    const expenseType = valueMap.get('expense_type') || '';
+    const remarks = valueMap.get('remarks') || '';
+
     const expense = await HiringExpense.create({
       companyId: req.hiringUser.companyId,
       employeeId: req.hiringUser.employeeId,
-      amount: Number(amount),
-      description,
-      status: 'pending'
+      templateId: template._id,
+      templateFields,
+      values: normalizedValues,
+      remarks,
+      amount: numericAmount,
+      expenseType,
+      invoiceUrl: invoice.url || '',
+      invoicePublicId: invoice.publicId || '',
+      invoiceFileName: invoice.fileName || '',
+      invoiceMimeType: invoice.mimeType || '',
+      status: 'pending',
+      submittedAt: new Date()
     });
+
     const admins = await HiringCompanyAdmin.find({ companyId: req.hiringUser.companyId });
     await Promise.all(admins.map(admin => mail(
       admin.email,
       'Expense Submitted',
-      `<p>An employee submitted an expense: ${description} (£${amount}).</p>`,
+      `<p>An employee submitted an expense for approval.</p><p>Amount: ${numericAmount}</p>`,
       'tabaltllp@gmail.com',
       'Tabalt Hiring Pro'
     )));
+
     res.json({ success: true, expense });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
@@ -923,11 +1184,104 @@ router.get('/employee/expenses', requireHiringAuth(['employee']), async (req, re
   }
 });
 
+router.get('/employee/expenses/:id', requireHiringAuth(['employee']), async (req, res) => {
+  try {
+    const expense = await HiringExpense.findOne({
+      _id: req.params.id,
+      companyId: req.hiringUser.companyId,
+      employeeId: req.hiringUser.employeeId
+    });
+    if (!expense) return res.status(404).json({ message: 'Expense not found' });
+    res.json({ success: true, expense });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
 router.get('/company/expenses', requireHiringAuth(['company_admin']), async (req, res) => {
   try {
-    const expenses = await HiringExpense.find({ companyId: req.hiringUser.companyId })
-      .populate('employeeId', 'name email');
+    const filters = { companyId: req.hiringUser.companyId };
+    if (req.query.status) filters.status = req.query.status;
+    if (req.query.employeeId) filters.employeeId = req.query.employeeId;
+    if (req.query.expenseType) filters.expenseType = req.query.expenseType;
+    if (req.query.from || req.query.to) {
+      filters.createdAt = {};
+      if (req.query.from) filters.createdAt.$gte = new Date(req.query.from);
+      if (req.query.to) filters.createdAt.$lte = new Date(req.query.to);
+    }
+    const expenses = await HiringExpense.find(filters)
+      .populate('employeeId', 'name email')
+      .sort({ createdAt: -1 });
     res.json({ success: true, expenses });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+router.get('/company/expenses/:id', requireHiringAuth(['company_admin']), async (req, res) => {
+  try {
+    const expense = await HiringExpense.findOne({
+      _id: req.params.id,
+      companyId: req.hiringUser.companyId
+    }).populate('employeeId', 'name email');
+    if (!expense) return res.status(404).json({ message: 'Expense not found' });
+    res.json({ success: true, expense });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+const streamExpensePdf = async (res, expense, disposition = 'attachment') => {
+  if (!expense.pdfPublicId) {
+    const pdfBuffer = await buildExpensePdfBuffer(expense);
+    const uploadResult = await uploadRawToCloudinary(pdfBuffer, {
+      folder: `hiring-pro/expenses/${expense.companyId}/pdfs`,
+      resource_type: 'image',
+      format: 'pdf',
+      public_id: `expense-${expense._id}`,
+      content_type: 'application/pdf',
+      type: 'upload'
+    });
+    expense.pdfUrl = uploadResult.secure_url;
+    expense.pdfPublicId = uploadResult.public_id;
+    await expense.save();
+  }
+
+  const signedUrl = expense.pdfPublicId
+    ? getSignedUrl(expense.pdfPublicId, { resource_type: 'image', format: 'pdf', type: 'upload' })
+    : expense.pdfUrl;
+  if (!signedUrl) {
+    return res.status(404).json({ message: 'Expense PDF not available' });
+  }
+
+  const fileResponse = await axios.get(signedUrl, { responseType: 'arraybuffer' });
+  res.setHeader('Content-Type', fileResponse.headers['content-type'] || 'application/pdf');
+  res.setHeader('Content-Disposition', `${disposition}; filename="expense-${expense._id}.pdf"`);
+  return res.send(fileResponse.data);
+};
+
+router.get('/employee/expenses/:id/pdf', requireHiringAuth(['employee']), async (req, res) => {
+  try {
+    const expense = await HiringExpense.findOne({
+      _id: req.params.id,
+      companyId: req.hiringUser.companyId,
+      employeeId: req.hiringUser.employeeId
+    }).populate('employeeId', 'name email');
+    if (!expense) return res.status(404).json({ message: 'Expense not found' });
+    return await streamExpensePdf(res, expense, 'attachment');
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+router.get('/company/expenses/:id/pdf', requireHiringAuth(['company_admin']), async (req, res) => {
+  try {
+    const expense = await HiringExpense.findOne({
+      _id: req.params.id,
+      companyId: req.hiringUser.companyId
+    }).populate('employeeId', 'name email');
+    if (!expense) return res.status(404).json({ message: 'Expense not found' });
+    return await streamExpensePdf(res, expense, 'attachment');
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
   }
@@ -935,17 +1289,24 @@ router.get('/company/expenses', requireHiringAuth(['company_admin']), async (req
 
 router.put('/company/expenses/:id', requireHiringAuth(['company_admin']), async (req, res) => {
   try {
-    const { status } = req.body;
+    const { status, adminComment } = req.body;
     const expense = await HiringExpense.findOne({ _id: req.params.id, companyId: req.hiringUser.companyId });
     if (!expense) return res.status(404).json({ message: 'Expense not found' });
     if (status) expense.status = status;
+    if (adminComment !== undefined) expense.adminComment = adminComment;
+    expense.reviewedAt = new Date();
+    expense.reviewedBy = {
+      id: req.hiringUser.adminId || req.hiringUser.userId || req.hiringUser.companyId,
+      name: req.hiringUser.name || 'Company Admin',
+      email: req.hiringUser.email || ''
+    };
     await expense.save();
     const employee = await HiringEmployee.findById(expense.employeeId);
     if (employee) {
       await mail(
         employee.email,
         'Expense Update',
-        `<p>Your expense request has been ${expense.status}.</p>`,
+        `<p>Your expense request has been ${expense.status}.</p><p>${adminComment || ''}</p>`,
         'tabaltllp@gmail.com',
         'Tabalt Hiring Pro'
       );
