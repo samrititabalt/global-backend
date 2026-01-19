@@ -28,6 +28,8 @@ const HiringExpenseSchema = new mongoose.Schema({
   invoiceMimeType: { type: String, default: '' },
   pdfUrl: { type: String, default: '' },
   pdfPublicId: { type: String, default: '' },
+  employeeDeleted: { type: Boolean, default: false },
+  adminDeleted: { type: Boolean, default: false },
   status: { type: String, default: 'pending' },
   adminComment: { type: String, default: '' },
   submittedAt: { type: Date },

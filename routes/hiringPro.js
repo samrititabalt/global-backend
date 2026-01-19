@@ -177,6 +177,22 @@ const buildExpensePdfBuffer = async (expense) => {
   });
 };
 
+const deleteExpenseAssets = async (expense) => {
+  const publicIds = [expense.invoicePublicId, expense.pdfPublicId].filter(Boolean);
+  for (const publicId of publicIds) {
+    try {
+      await deleteFromCloudinary(publicId, 'raw');
+    } catch (error) {
+      console.error('Expense asset delete error (raw):', error?.message);
+    }
+    try {
+      await deleteFromCloudinary(publicId, 'image');
+    } catch (error) {
+      console.error('Expense asset delete error (image):', error?.message);
+    }
+  }
+};
+
 const buildOfferLetterPdfBuffer = async (company, offer, content) => {
   const doc = new PDFDocument({ size: 'A4', margin: 50 });
   const chunks = [];
@@ -1176,7 +1192,8 @@ router.get('/employee/expenses', requireHiringAuth(['employee']), async (req, re
   try {
     const expenses = await HiringExpense.find({
       companyId: req.hiringUser.companyId,
-      employeeId: req.hiringUser.employeeId
+      employeeId: req.hiringUser.employeeId,
+      employeeDeleted: { $ne: true }
     }).sort({ createdAt: -1 });
     res.json({ success: true, expenses });
   } catch (error) {
@@ -1189,7 +1206,8 @@ router.get('/employee/expenses/:id', requireHiringAuth(['employee']), async (req
     const expense = await HiringExpense.findOne({
       _id: req.params.id,
       companyId: req.hiringUser.companyId,
-      employeeId: req.hiringUser.employeeId
+      employeeId: req.hiringUser.employeeId,
+      employeeDeleted: { $ne: true }
     });
     if (!expense) return res.status(404).json({ message: 'Expense not found' });
     res.json({ success: true, expense });
@@ -1198,9 +1216,32 @@ router.get('/employee/expenses/:id', requireHiringAuth(['employee']), async (req
   }
 });
 
+router.delete('/employee/expenses/:id', requireHiringAuth(['employee']), async (req, res) => {
+  try {
+    const expense = await HiringExpense.findOne({
+      _id: req.params.id,
+      companyId: req.hiringUser.companyId,
+      employeeId: req.hiringUser.employeeId
+    });
+    if (!expense) return res.status(404).json({ message: 'Expense not found' });
+
+    if (expense.status === 'approved') {
+      expense.employeeDeleted = true;
+      await expense.save();
+      return res.json({ success: true, deleted: 'employee_only' });
+    }
+
+    await deleteExpenseAssets(expense);
+    await expense.deleteOne();
+    return res.json({ success: true, deleted: 'all' });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
 router.get('/company/expenses', requireHiringAuth(['company_admin']), async (req, res) => {
   try {
-    const filters = { companyId: req.hiringUser.companyId };
+    const filters = { companyId: req.hiringUser.companyId, adminDeleted: { $ne: true } };
     if (req.query.status) filters.status = req.query.status;
     if (req.query.employeeId) filters.employeeId = req.query.employeeId;
     if (req.query.expenseType) filters.expenseType = req.query.expenseType;
@@ -1222,7 +1263,8 @@ router.get('/company/expenses/:id', requireHiringAuth(['company_admin']), async 
   try {
     const expense = await HiringExpense.findOne({
       _id: req.params.id,
-      companyId: req.hiringUser.companyId
+      companyId: req.hiringUser.companyId,
+      adminDeleted: { $ne: true }
     }).populate('employeeId', 'name email');
     if (!expense) return res.status(404).json({ message: 'Expense not found' });
     res.json({ success: true, expense });
@@ -1265,7 +1307,8 @@ router.get('/employee/expenses/:id/pdf', requireHiringAuth(['employee']), async 
     const expense = await HiringExpense.findOne({
       _id: req.params.id,
       companyId: req.hiringUser.companyId,
-      employeeId: req.hiringUser.employeeId
+      employeeId: req.hiringUser.employeeId,
+      employeeDeleted: { $ne: true }
     }).populate('employeeId', 'name email');
     if (!expense) return res.status(404).json({ message: 'Expense not found' });
     return await streamExpensePdf(res, expense, 'attachment');
@@ -1278,7 +1321,8 @@ router.get('/company/expenses/:id/pdf', requireHiringAuth(['company_admin']), as
   try {
     const expense = await HiringExpense.findOne({
       _id: req.params.id,
-      companyId: req.hiringUser.companyId
+      companyId: req.hiringUser.companyId,
+      adminDeleted: { $ne: true }
     }).populate('employeeId', 'name email');
     if (!expense) return res.status(404).json({ message: 'Expense not found' });
     return await streamExpensePdf(res, expense, 'attachment');
@@ -1312,6 +1356,35 @@ router.put('/company/expenses/:id', requireHiringAuth(['company_admin']), async 
       );
     }
     res.json({ success: true, expense });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+router.delete('/company/expenses/:id', requireHiringAuth(['company_admin']), async (req, res) => {
+  try {
+    const expense = await HiringExpense.findOne({
+      _id: req.params.id,
+      companyId: req.hiringUser.companyId
+    });
+    if (!expense) return res.status(404).json({ message: 'Expense not found' });
+
+    await deleteExpenseAssets(expense);
+    expense.adminDeleted = true;
+    await expense.save();
+    await expense.deleteOne();
+
+    const employee = await HiringEmployee.findById(expense.employeeId);
+    if (employee) {
+      await mail(
+        employee.email,
+        'Expense Removed',
+        '<p>Your expense report has been removed by the administrator.</p>',
+        'tabaltllp@gmail.com',
+        'Tabalt Hiring Pro'
+      );
+    }
+    res.json({ success: true });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
   }
