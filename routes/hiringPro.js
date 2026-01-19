@@ -267,74 +267,97 @@ const buildDocumentPdfBuffer = async (company, document, content) => {
   doc.on('data', (chunk) => chunks.push(chunk));
 
   const logoUrl = document.documentLogoUrl || company?.logoUrl;
-  if (logoUrl) {
-    try {
-      const logoResponse = await axios.get(logoUrl, { responseType: 'arraybuffer' });
-      const logoWidth = 110;
-      doc.image(logoResponse.data, doc.page.width - logoWidth - 50, 40, { width: logoWidth });
-    } catch (error) {
-      console.warn('Unable to load document logo:', error.message);
+  const isNda = (document.documentTypeLabel || document.documentType || '').toLowerCase().includes('nda');
+  const sanitizedContent = sanitizeOfferContent(content || '');
+  const pageChunks = isNda
+    ? sanitizedContent.split(/=== Page \d+ ===/i).map((page) => page.trim()).filter(Boolean)
+    : [sanitizedContent];
+
+  pageChunks.forEach((pageContent, pageIndex) => {
+    if (pageIndex > 0) {
+      doc.addPage();
     }
-  }
 
-  if (company?.name) {
-    doc.fontSize(16).text(company.name);
-  }
-  doc.moveDown(0.5);
+    if (pageIndex === 0 && logoUrl) {
+      try {
+        const logoResponse = await axios.get(logoUrl, { responseType: 'arraybuffer' });
+        const logoWidth = 110;
+        doc.image(logoResponse.data, doc.page.width - logoWidth - 50, 40, { width: logoWidth });
+      } catch (error) {
+        console.warn('Unable to load document logo:', error.message);
+      }
+    }
 
-  doc.fontSize(14).text(document.documentTypeLabel || document.documentType || 'Document', { underline: true });
-  doc.moveDown();
-  if (document.documentDate) {
-    doc.fontSize(12).text(`Date: ${document.documentDate}`);
-  }
-  doc.fontSize(12).text(`Candidate: ${document.candidateName}`);
-  if (document.title) {
-    doc.text(`Title: ${document.title}`);
-  }
-  if (document.employeeCode) {
-    doc.text(`Employee ID: ${document.employeeCode}`);
-  }
-  if (document.documentTitle) {
-    doc.text(`Document Title: ${document.documentTitle}`);
-  }
-  doc.moveDown();
+    if (pageIndex === 0) {
+      if (company?.name) {
+        doc.fontSize(16).text(company.name);
+      }
+      doc.moveDown(0.5);
 
-  const lines = sanitizeOfferContent(content || '').split(/\r?\n/);
-  lines.forEach((line) => {
-    if (!line.trim()) {
+      doc.fontSize(14).text(document.documentTypeLabel || document.documentType || 'Document', { underline: true });
       doc.moveDown();
-      return;
+      if (document.documentDate) {
+        doc.fontSize(12).text(`Date: ${document.documentDate}`);
+      }
+      doc.fontSize(12).text(`Candidate: ${document.candidateName}`);
+      if (document.title) {
+        doc.text(`Title: ${document.title}`);
+      }
+      if (document.employeeCode) {
+        doc.text(`Employee ID: ${document.employeeCode}`);
+      }
+      if (document.documentTitle) {
+        doc.text(`Document Title: ${document.documentTitle}`);
+      }
+      doc.moveDown();
     }
-    doc.text(line);
+
+    const lines = pageContent.split(/\r?\n/);
+    lines.forEach((line) => {
+      if (!line.trim()) {
+        doc.moveDown();
+        return;
+      }
+      doc.text(line);
+    });
+
+    if (pageIndex === pageChunks.length - 1) {
+      doc.moveDown();
+      doc.text('Signatures', { underline: true });
+
+      if (document.adminSignatureUrl) {
+        try {
+          const adminSignatureResponse = await axios.get(document.adminSignatureUrl, { responseType: 'arraybuffer' });
+          doc.moveDown(0.5);
+          doc.text(company?.signingAuthority?.name || 'Authorized Signatory');
+          doc.image(adminSignatureResponse.data, { width: 120 });
+        } catch (error) {
+          console.warn('Unable to load admin signature:', error.message);
+        }
+      } else {
+        doc.moveDown(0.5);
+        doc.text(company?.signingAuthority?.name || 'Authorized Signatory');
+      }
+
+      if (document.employeeSignatureUrl) {
+        try {
+          const employeeSignatureResponse = await axios.get(document.employeeSignatureUrl, { responseType: 'arraybuffer' });
+          doc.moveDown(0.5);
+          doc.text(`${document.candidateName} (Employee)`);
+          doc.image(employeeSignatureResponse.data, { width: 120 });
+        } catch (error) {
+          console.warn('Unable to load employee signature:', error.message);
+        }
+      }
+    }
+
+    if (isNda && document.documentDate) {
+      doc.fontSize(9);
+      doc.text(`Date: ${document.documentDate}`, 50, doc.page.height - 40, {
+        align: 'right'
+      });
+    }
   });
-
-  doc.moveDown();
-  doc.text('Signatures', { underline: true });
-
-  if (document.adminSignatureUrl) {
-    try {
-      const adminSignatureResponse = await axios.get(document.adminSignatureUrl, { responseType: 'arraybuffer' });
-      doc.moveDown(0.5);
-      doc.text(company?.signingAuthority?.name || 'Authorized Signatory');
-      doc.image(adminSignatureResponse.data, { width: 120 });
-    } catch (error) {
-      console.warn('Unable to load admin signature:', error.message);
-    }
-  } else {
-    doc.moveDown(0.5);
-    doc.text(company?.signingAuthority?.name || 'Authorized Signatory');
-  }
-
-  if (document.employeeSignatureUrl) {
-    try {
-      const employeeSignatureResponse = await axios.get(document.employeeSignatureUrl, { responseType: 'arraybuffer' });
-      doc.moveDown(0.5);
-      doc.text(`${document.candidateName} (Employee)`);
-      doc.image(employeeSignatureResponse.data, { width: 120 });
-    } catch (error) {
-      console.warn('Unable to load employee signature:', error.message);
-    }
-  }
 
   return new Promise((resolve, reject) => {
     doc.on('end', () => resolve(Buffer.concat(chunks)));
@@ -767,7 +790,29 @@ router.post('/company/offer-letter/generate', requireHiringAuth(['company_admin'
 
     const docTypeLabel = documentType === 'Others' && customDocumentType ? customDocumentType : documentType;
     const dateFormat = getDocumentDateFormat(docTypeLabel);
-    const prompt = `Generate a professional HR/legal document draft (max 5 pages).
+    const isNda = docTypeLabel.toLowerCase() === 'nda' || docTypeLabel.toLowerCase().includes('non-disclosure');
+    const prompt = isNda
+      ? `Generate a professional Non-Disclosure Agreement (NDA) with clear formatting (max 5 pages).
+Company: ${company.name}
+Candidate Name: ${candidateName}
+Title: ${title}
+Employee ID: ${employeeCode || 'EMP-XXXXXX'}
+Date: Use today's date in ${dateFormat} format
+
+Formatting requirements:
+- Use clear section headers (e.g., PURPOSE, CONFIDENTIAL INFORMATION, TERM, GOVERNING LAW).
+- Use numbered clauses and bulleted sub-points.
+- Insert explicit page markers: "=== Page 1 ===", "=== Page 2 ===", etc.
+- Add a short footer line per page with the date.
+- No placeholders, brackets, or asterisks. If missing details, fill with realistic dummy data and list in "dummyFields".
+
+Return JSON ONLY:
+{
+  "content": "full NDA text with page markers",
+  "date": "formatted date",
+  "dummyFields": ["Field Name"]
+}`
+      : `Generate a professional HR/legal document draft (max 5 pages).
 Company: ${company.name}
 Signing Authority: ${company.signingAuthority.name}, ${company.signingAuthority.title}
 Candidate Name: ${candidateName}
