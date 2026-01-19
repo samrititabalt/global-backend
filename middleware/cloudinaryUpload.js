@@ -11,7 +11,7 @@ const storage = multer.memoryStorage();
 
 const fileFilter = (req, file, cb) => {
   // Accept images
-  if (file.fieldname === 'image' || file.fieldname === 'avatar' || file.fieldname === 'logo') {
+  if (file.fieldname === 'image' || file.fieldname === 'avatar' || file.fieldname === 'logo' || file.fieldname === 'signature' || file.fieldname === 'documentLogo') {
     if (file.mimetype.startsWith('image/')) {
       cb(null, true);
     } else {
@@ -136,6 +136,50 @@ const uploadToCloudinary = async (req, res, next) => {
           .catch(error => {
             console.error(`Error uploading avatar ${file.originalname}:`, error);
             throw new Error(`Failed to upload avatar: ${error.message}`);
+          });
+        uploadPromises.push(uploadPromise);
+      }
+    }
+
+    // Upload document logo
+    if (req.files.documentLogo && req.files.documentLogo.length > 0) {
+      for (const file of req.files.documentLogo) {
+        const logoFolder = `hiring-pro/document-logos/${uploadOwnerId}`;
+        const uploadPromise = uploadImage(file.buffer, logoFolder, file.mimetype)
+          .then(result => ({
+            type: 'documentLogo',
+            url: result.url,
+            publicId: result.publicId,
+            fileName: file.originalname,
+            size: result.bytes,
+            width: result.width,
+            height: result.height,
+          }))
+          .catch(error => {
+            console.error(`Error uploading document logo ${file.originalname}:`, error);
+            throw new Error(`Failed to upload document logo: ${error.message}`);
+          });
+        uploadPromises.push(uploadPromise);
+      }
+    }
+
+    // Upload signature
+    if (req.files.signature && req.files.signature.length > 0) {
+      for (const file of req.files.signature) {
+        const signatureFolder = `hiring-pro/signatures/${uploadOwnerId}`;
+        const uploadPromise = uploadImage(file.buffer, signatureFolder, file.mimetype)
+          .then(result => ({
+            type: 'signature',
+            url: result.url,
+            publicId: result.publicId,
+            fileName: file.originalname,
+            size: result.bytes,
+            width: result.width,
+            height: result.height,
+          }))
+          .catch(error => {
+            console.error(`Error uploading signature ${file.originalname}:`, error);
+            throw new Error(`Failed to upload signature: ${error.message}`);
           });
         uploadPromises.push(uploadPromise);
       }

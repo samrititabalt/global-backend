@@ -7,6 +7,7 @@ const HiringEmployeeSchema = new mongoose.Schema({
   email: { type: String, required: true, unique: true, lowercase: true },
   password: { type: String, required: true },
   role: { type: String, default: 'employee' },
+  employeeCode: { type: String, default: '' },
   designation: { type: String, default: '' },
   phone: { type: String, default: '' },
   emergencyContact: { type: String, default: '' },

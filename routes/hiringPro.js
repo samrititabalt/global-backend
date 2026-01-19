@@ -71,6 +71,36 @@ const sanitizeOfferContent = (content = '') => {
     .trim();
 };
 
+const getDocumentDateFormat = (documentType = '') => {
+  const normalized = documentType.toLowerCase();
+  if (normalized.includes('offer') || normalized.includes('employment') || normalized.includes('visa')) {
+    return 'UK';
+  }
+  return 'US';
+};
+
+const formatDocumentDate = (date = new Date(), format = 'UK') => {
+  const day = String(date.getDate()).padStart(2, '0');
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const year = date.getFullYear();
+  return format === 'US' ? `${month}/${day}/${year}` : `${day}/${month}/${year}`;
+};
+
+const parseJsonWithFallback = (text) => {
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    const match = text.match(/\{[\s\S]*\}/);
+    if (!match) return null;
+    try {
+      return JSON.parse(match[0]);
+    } catch (innerError) {
+      return null;
+    }
+  }
+};
+
 const normalizeSalaryBreakup = (payload = {}) => {
   const currency = payload.currency || 'USD';
   const components = Array.isArray(payload.components) ? payload.components : [];
@@ -195,6 +225,26 @@ const buildExpensePdfBuffer = async (expense) => {
   });
 };
 
+const generateEmployeeCode = async (companyId) => {
+  let code = '';
+  let exists = true;
+  while (exists) {
+    const suffix = crypto.randomBytes(3).toString('hex').toUpperCase();
+    code = `EMP-${companyId.toString().slice(-4)}-${suffix}`;
+    // eslint-disable-next-line no-await-in-loop
+    exists = await HiringEmployee.exists({ companyId, employeeCode: code });
+  }
+  return code;
+};
+
+const ensureEmployeeCode = async (employee) => {
+  if (!employee.employeeCode) {
+    employee.employeeCode = await generateEmployeeCode(employee.companyId);
+    await employee.save();
+  }
+  return employee;
+};
+
 const deleteExpenseAssets = async (expense) => {
   const publicIds = [expense.invoicePublicId, expense.pdfPublicId].filter(Boolean);
   for (const publicId of publicIds) {
@@ -211,37 +261,41 @@ const deleteExpenseAssets = async (expense) => {
   }
 };
 
-const buildOfferLetterPdfBuffer = async (company, offer, content) => {
+const buildDocumentPdfBuffer = async (company, document, content) => {
   const doc = new PDFDocument({ size: 'A4', margin: 50 });
   const chunks = [];
   doc.on('data', (chunk) => chunks.push(chunk));
 
-  if (company?.logoUrl) {
+  const logoUrl = document.documentLogoUrl || company?.logoUrl;
+  if (logoUrl) {
     try {
-      const logoResponse = await axios.get(company.logoUrl, { responseType: 'arraybuffer' });
-      doc.image(logoResponse.data, { width: 120 });
-      doc.moveDown();
+      const logoResponse = await axios.get(logoUrl, { responseType: 'arraybuffer' });
+      const logoWidth = 110;
+      doc.image(logoResponse.data, doc.page.width - logoWidth - 50, 40, { width: logoWidth });
     } catch (error) {
-      console.warn('Unable to load company logo for offer letter:', error.message);
+      console.warn('Unable to load document logo:', error.message);
     }
   }
 
   if (company?.name) {
-    doc.fontSize(18).text(company.name);
-    doc.moveDown(0.5);
+    doc.fontSize(16).text(company.name);
   }
+  doc.moveDown(0.5);
 
-  doc.fontSize(14).text('Offer Letter', { underline: true });
+  doc.fontSize(14).text(document.documentTypeLabel || document.documentType || 'Document', { underline: true });
   doc.moveDown();
-  if (offer.startDate) {
-    doc.fontSize(12).text(`Date: ${offer.startDate}`);
+  if (document.documentDate) {
+    doc.fontSize(12).text(`Date: ${document.documentDate}`);
   }
-  doc.fontSize(12).text(`Candidate: ${offer.candidateName}`);
-  doc.text(`Role: ${offer.roleTitle}`);
-  doc.text(`Salary Package: ${offer.salaryPackage}`);
-  if (offer.ctcBreakdown) {
-    doc.moveDown(0.5);
-    doc.text(`CTC Breakdown: ${offer.ctcBreakdown}`);
+  doc.fontSize(12).text(`Candidate: ${document.candidateName}`);
+  if (document.title) {
+    doc.text(`Title: ${document.title}`);
+  }
+  if (document.employeeCode) {
+    doc.text(`Employee ID: ${document.employeeCode}`);
+  }
+  if (document.documentTitle) {
+    doc.text(`Document Title: ${document.documentTitle}`);
   }
   doc.moveDown();
 
@@ -255,11 +309,32 @@ const buildOfferLetterPdfBuffer = async (company, offer, content) => {
   });
 
   doc.moveDown();
-  doc.text('Signing Authority', { underline: true });
-  doc.font('Helvetica-Oblique').text(company?.signingAuthority?.name || '');
-  doc.font('Helvetica').text(company?.signingAuthority?.title || '');
-  doc.moveDown(0.5);
-  doc.font('Helvetica-Oblique').text(`Digitally signed by ${company?.signingAuthority?.name || ''}`);
+  doc.text('Signatures', { underline: true });
+
+  if (document.adminSignatureUrl) {
+    try {
+      const adminSignatureResponse = await axios.get(document.adminSignatureUrl, { responseType: 'arraybuffer' });
+      doc.moveDown(0.5);
+      doc.text(company?.signingAuthority?.name || 'Authorized Signatory');
+      doc.image(adminSignatureResponse.data, { width: 120 });
+    } catch (error) {
+      console.warn('Unable to load admin signature:', error.message);
+    }
+  } else {
+    doc.moveDown(0.5);
+    doc.text(company?.signingAuthority?.name || 'Authorized Signatory');
+  }
+
+  if (document.employeeSignatureUrl) {
+    try {
+      const employeeSignatureResponse = await axios.get(document.employeeSignatureUrl, { responseType: 'arraybuffer' });
+      doc.moveDown(0.5);
+      doc.text(`${document.candidateName} (Employee)`);
+      doc.image(employeeSignatureResponse.data, { width: 120 });
+    } catch (error) {
+      console.warn('Unable to load employee signature:', error.message);
+    }
+  }
 
   return new Promise((resolve, reject) => {
     doc.on('end', () => resolve(Buffer.concat(chunks)));
@@ -650,7 +725,8 @@ router.get('/company/profile', requireHiringAuth(['company_admin']), async (req,
 router.get('/company/employees', requireHiringAuth(['company_admin']), async (req, res) => {
   try {
     const employees = await HiringEmployee.find({ companyId: req.hiringUser.companyId });
-    res.json({ success: true, employees });
+    const updatedEmployees = await Promise.all(employees.map(ensureEmployeeCode));
+    res.json({ success: true, employees: updatedEmployees });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
   }
@@ -671,97 +747,164 @@ router.post('/company/employees', requireHiringAuth(['company_admin']), async (r
       password,
       designation: designation || ''
     });
+    await ensureEmployeeCode(employee);
     res.json({ success: true, employee });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 });
 
-// Offer letter generation
+// Documents generator (Offer Letter, Employment Contract, NDA, Vendor Contract, Others)
 router.post('/company/offer-letter/generate', requireHiringAuth(['company_admin']), async (req, res) => {
   try {
     const company = await HiringCompany.findById(req.hiringUser.companyId);
     if (!company) return res.status(404).json({ message: 'Company not found' });
 
-    const { candidateName, roleTitle, startDate, salaryPackage, ctcBreakdown, notes } = req.body;
-    if (!candidateName || !roleTitle || !startDate || !salaryPackage) {
-      return res.status(400).json({ message: 'Candidate name, role, start date, and salary are required' });
+    const { candidateName, title, employeeId, employeeCode, documentType, customDocumentType } = req.body;
+    if (!candidateName || !title || !documentType) {
+      return res.status(400).json({ message: 'Candidate name, title, and document type are required' });
     }
 
-    const prompt = `Generate a professional HR offer letter.
+    const docTypeLabel = documentType === 'Others' && customDocumentType ? customDocumentType : documentType;
+    const dateFormat = getDocumentDateFormat(docTypeLabel);
+    const prompt = `Generate a professional HR/legal document draft (max 5 pages).
 Company: ${company.name}
 Signing Authority: ${company.signingAuthority.name}, ${company.signingAuthority.title}
-Candidate: ${candidateName}
-Role: ${roleTitle}
-Start Date: ${startDate}
-Salary Package: ${salaryPackage}
-CTC Breakdown: ${ctcBreakdown || 'Not provided'}
-Additional Notes: ${notes || 'None'}
+Candidate Name: ${candidateName}
+Title: ${title}
+Employee ID: ${employeeCode || 'EMP-XXXXXX'}
+Document Type: ${docTypeLabel}
+Date: Use today's date in ${dateFormat} format
+
 Requirements:
-- Formal HR tone
-- Include sections: Offer Overview, Compensation, Joining Details, Sign-off
-- Use placeholders already provided (do not invent new names)
-Return plain text with clear headings.`;
+- Use UK or US legal/HR terminology appropriate to the document type.
+- Ensure the document is ready for sharing (no placeholders, no asterisks, no brackets).
+- If a required field is missing, fill with realistic dummy data and list it in "dummyFields".
+- Return JSON ONLY:
+{
+  "content": "document body text",
+  "date": "formatted date",
+  "dummyFields": ["Field Name"]
+}`;
 
-    const content = await generateAIResponse(prompt, [], 'hiring');
+    const aiResponse = await generateAIResponse(prompt, [], 'hiring');
+    const parsed = parseJsonWithFallback(aiResponse);
+    const fallbackDate = formatDocumentDate(new Date(), dateFormat);
+    const content = parsed?.content || aiResponse || '';
     const sanitized = sanitizeOfferContent(content || '');
-    res.json({ success: true, content: sanitized });
+    res.json({
+      success: true,
+      content: sanitized,
+      date: parsed?.date || fallbackDate,
+      dummyFields: parsed?.dummyFields || []
+    });
   } catch (error) {
-    console.error('Offer letter generation error:', error);
+    console.error('Document generation error:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 });
 
-router.post('/company/offer-letter', requireHiringAuth(['company_admin']), async (req, res) => {
-  try {
-    const { candidateName, roleTitle, startDate, salaryPackage, ctcBreakdown, content } = req.body;
-    if (!candidateName || !roleTitle || !startDate || !salaryPackage || !content) {
-      return res.status(400).json({ message: 'Missing required fields' });
+router.post(
+  '/company/offer-letter',
+  requireHiringAuth(['company_admin']),
+  upload.fields([{ name: 'documentLogo', maxCount: 1 }, { name: 'signature', maxCount: 1 }]),
+  uploadToCloudinary,
+  async (req, res) => {
+    try {
+      const {
+        candidateName,
+        title,
+        employeeId,
+        employeeCode,
+        documentType,
+        customDocumentType,
+        documentDate,
+        content
+      } = req.body;
+      if (!candidateName || !title || !documentType || !content) {
+        return res.status(400).json({ message: 'Missing required fields' });
+      }
+
+      const company = await HiringCompany.findById(req.hiringUser.companyId);
+      if (!company) return res.status(404).json({ message: 'Company not found' });
+
+      const documentLogo = req.uploadedFiles?.find(file => file.type === 'documentLogo');
+      const signatureFile = req.uploadedFiles?.find(file => file.type === 'signature');
+
+      const docTypeLabel = documentType === 'Others' && customDocumentType ? customDocumentType : documentType;
+      const sanitizedContent = sanitizeOfferContent(content || '');
+      const docDate = documentDate || formatDocumentDate(new Date(), getDocumentDateFormat(docTypeLabel));
+      let resolvedEmployeeCode = employeeCode || '';
+      if (employeeId && !resolvedEmployeeCode) {
+        const employeeRecord = await HiringEmployee.findById(employeeId);
+        if (employeeRecord) {
+          await ensureEmployeeCode(employeeRecord);
+          resolvedEmployeeCode = employeeRecord.employeeCode || '';
+        }
+      }
+
+      const pdfBuffer = await buildDocumentPdfBuffer(company, {
+        candidateName,
+        title,
+        employeeCode: resolvedEmployeeCode,
+        documentType,
+        documentTypeLabel: docTypeLabel,
+        documentTitle: title,
+        documentDate: docDate,
+        documentLogoUrl: documentLogo?.url || company.logoUrl || null,
+        adminSignatureUrl: signatureFile?.url || ''
+      }, sanitizedContent);
+
+      const uploadResult = await uploadRawToCloudinary(pdfBuffer, {
+        folder: `hiring-pro/documents/${company._id}`,
+        resource_type: 'image',
+        format: 'pdf',
+        public_id: `document-${Date.now()}`,
+        content_type: 'application/pdf',
+        type: 'upload'
+      });
+
+      const offerLetter = await HiringOfferLetter.create({
+        companyId: req.hiringUser.companyId,
+        employeeId: employeeId || null,
+        candidateName,
+        documentTitle: title,
+        documentType,
+        customDocumentType: customDocumentType || '',
+        employeeCode: resolvedEmployeeCode || '',
+        documentDate: docDate,
+        content: sanitizedContent,
+        fileUrl: uploadResult?.secure_url || null,
+        filePublicId: uploadResult?.public_id || null,
+        companyName: company.name || '',
+        companyLogoUrl: company.logoUrl || null,
+        documentLogoUrl: documentLogo?.url || company.logoUrl || null,
+        adminSignatureUrl: signatureFile?.url || '',
+        adminSignaturePublicId: signatureFile?.publicId || '',
+        adminSignedAt: signatureFile?.url ? new Date() : null,
+        signingAuthorityName: company.signingAuthority?.name || '',
+        signingAuthorityTitle: company.signingAuthority?.title || '',
+        createdBy: req.hiringUser.adminId
+      });
+      if (employeeId) {
+        const employee = await HiringEmployee.findById(employeeId);
+        if (employee) {
+          await mail(
+            employee.email,
+            'Document Ready',
+            `<p>A new ${docTypeLabel} is ready for you to review and sign.</p>`,
+            'tabaltllp@gmail.com',
+            'Tabalt Hiring Pro'
+          );
+        }
+      }
+      res.json({ success: true, offerLetter });
+    } catch (error) {
+      console.error('Document save error:', error);
+      res.status(500).json({ message: 'Server error', error: error.message });
     }
-    const company = await HiringCompany.findById(req.hiringUser.companyId);
-    if (!company) return res.status(404).json({ message: 'Company not found' });
-
-    const sanitizedContent = sanitizeOfferContent(content || '');
-
-    const pdfBuffer = await buildOfferLetterPdfBuffer(company, {
-      candidateName,
-      roleTitle,
-      startDate,
-      salaryPackage,
-      ctcBreakdown: ctcBreakdown || ''
-    }, sanitizedContent);
-
-    const uploadResult = await uploadRawToCloudinary(pdfBuffer, {
-      folder: `hiring-pro/offer-letters/${company._id}`,
-      resource_type: 'image',
-      format: 'pdf',
-      public_id: `offer-letter-${Date.now()}`,
-      content_type: 'application/pdf',
-      type: 'upload'
-    });
-
-    const offerLetter = await HiringOfferLetter.create({
-      companyId: req.hiringUser.companyId,
-      candidateName,
-      roleTitle,
-      startDate,
-      salaryPackage,
-      ctcBreakdown: ctcBreakdown || '',
-      content: sanitizedContent,
-      fileUrl: uploadResult?.secure_url || null,
-      filePublicId: uploadResult?.public_id || null,
-      companyName: company.name || '',
-      companyLogoUrl: company.logoUrl || null,
-      signingAuthorityName: company.signingAuthority?.name || '',
-      signingAuthorityTitle: company.signingAuthority?.title || '',
-      createdBy: req.hiringUser.adminId
-    });
-    res.json({ success: true, offerLetter });
-  } catch (error) {
-    console.error('Offer letter save error:', error);
-    res.status(500).json({ message: 'Server error', error: error.message });
   }
-});
+);
 
 router.get('/company/offer-letters', requireHiringAuth(['company_admin']), async (req, res) => {
   try {
@@ -790,7 +933,7 @@ router.get('/company/offer-letters/:id/download', requireHiringAuth(['company_ad
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader(
       'Content-Disposition',
-      `inline; filename="offer-letter-${offerLetter.candidateName || 'document'}.pdf"`
+      `inline; filename="document-${offerLetter.candidateName || 'document'}.pdf"`
     );
     return res.send(fileResponse.data);
   } catch (error) {
@@ -1599,6 +1742,7 @@ router.get('/company/employees/:id', requireHiringAuth(['company_admin']), async
       companyId: req.hiringUser.companyId
     });
     if (!employee) return res.status(404).json({ message: 'Employee not found' });
+    await ensureEmployeeCode(employee);
     const [timesheets, holidays, documents, offerLetters, profile, expenses] = await Promise.all([
       HiringTimesheet.find({ companyId: req.hiringUser.companyId, employeeId: employee._id }),
       HiringHoliday.find({ companyId: req.hiringUser.companyId, employeeId: employee._id }),
@@ -1834,7 +1978,7 @@ router.get('/employee/offer-letters/:id/view', requireHiringAuth(['employee']), 
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader(
       'Content-Disposition',
-      `inline; filename="offer-letter-${offerLetter.candidateName || 'document'}.pdf"`
+      `inline; filename="document-${offerLetter.candidateName || 'document'}.pdf"`
     );
     return res.send(fileResponse.data);
   } catch (error) {
@@ -1861,12 +2005,72 @@ router.get('/employee/offer-letters/:id/download', requireHiringAuth(['employee'
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader(
       'Content-Disposition',
-      `attachment; filename="offer-letter-${offerLetter.candidateName || 'document'}.pdf"`
+      `attachment; filename="document-${offerLetter.candidateName || 'document'}.pdf"`
     );
     return res.send(fileResponse.data);
   } catch (error) {
     return res.status(500).json({ message: 'Unable to download offer letter' });
   }
 });
+
+router.post(
+  '/employee/offer-letters/:id/sign',
+  requireHiringAuth(['employee']),
+  upload.fields([{ name: 'signature', maxCount: 1 }]),
+  uploadToCloudinary,
+  async (req, res) => {
+    try {
+      const offerLetter = await HiringOfferLetter.findOne({
+        _id: req.params.id,
+        companyId: req.hiringUser.companyId,
+        employeeId: req.hiringUser.employeeId
+      });
+      if (!offerLetter) return res.status(404).json({ message: 'Document not found' });
+
+      const signatureFile = req.uploadedFiles?.find(file => file.type === 'signature');
+      if (!signatureFile?.url) {
+        return res.status(400).json({ message: 'Signature upload is required' });
+      }
+
+      offerLetter.employeeSignatureUrl = signatureFile.url;
+      offerLetter.employeeSignaturePublicId = signatureFile.publicId;
+      offerLetter.employeeSignedAt = new Date();
+
+      const company = await HiringCompany.findById(req.hiringUser.companyId);
+      if (!company) return res.status(404).json({ message: 'Company not found' });
+
+      const pdfBuffer = await buildDocumentPdfBuffer(company, {
+        candidateName: offerLetter.candidateName,
+        title: offerLetter.documentTitle || '',
+        employeeCode: offerLetter.employeeCode || '',
+        documentType: offerLetter.documentType,
+        documentTypeLabel: offerLetter.customDocumentType || offerLetter.documentType,
+        documentTitle: offerLetter.documentTitle || '',
+        documentDate: offerLetter.documentDate || '',
+        documentLogoUrl: offerLetter.documentLogoUrl || company.logoUrl || null,
+        adminSignatureUrl: offerLetter.adminSignatureUrl || '',
+        employeeSignatureUrl: offerLetter.employeeSignatureUrl
+      }, offerLetter.content || '');
+
+      const uploadResult = await uploadRawToCloudinary(pdfBuffer, {
+        folder: `hiring-pro/documents/${company._id}`,
+        resource_type: 'image',
+        format: 'pdf',
+        public_id: offerLetter.filePublicId || `document-${Date.now()}`,
+        content_type: 'application/pdf',
+        type: 'upload'
+      });
+
+      offerLetter.fileUrl = uploadResult?.secure_url || offerLetter.fileUrl;
+      offerLetter.filePublicId = uploadResult?.public_id || offerLetter.filePublicId;
+      await offerLetter.save();
+
+      res.json({ success: true, offerLetter });
+    } catch (error) {
+      console.error('Employee signature upload error:', error);
+      res.status(500).json({ message: 'Server error', error: error.message });
+    }
+  }
+);
 
 module.exports = router;
