@@ -1123,6 +1123,41 @@ router.get('/company/employees/:id', requireHiringAuth(['company_admin']), async
   }
 });
 
+// Admin update employee details + profile
+router.put('/company/employees/:id/profile', requireHiringAuth(['company_admin']), async (req, res) => {
+  try {
+    const { employee: employeeUpdates = {}, profile: profileUpdates = {} } = req.body || {};
+    const employee = await HiringEmployee.findOne({
+      _id: req.params.id,
+      companyId: req.hiringUser.companyId
+    });
+    if (!employee) return res.status(404).json({ message: 'Employee not found' });
+
+    if (employeeUpdates.name !== undefined) employee.name = employeeUpdates.name;
+    if (employeeUpdates.email !== undefined) employee.email = employeeUpdates.email;
+    if (employeeUpdates.designation !== undefined) employee.designation = employeeUpdates.designation;
+    await employee.save();
+
+    const profile = await HiringEmployeeProfile.findOneAndUpdate(
+      { employeeId: employee._id, companyId: req.hiringUser.companyId },
+      { ...profileUpdates, employeeId: employee._id, companyId: req.hiringUser.companyId },
+      { new: true, upsert: true, setDefaultsOnInsert: true }
+    );
+
+    const [timesheets, holidays, documents, offerLetters, expenses] = await Promise.all([
+      HiringTimesheet.find({ companyId: req.hiringUser.companyId, employeeId: employee._id }),
+      HiringHoliday.find({ companyId: req.hiringUser.companyId, employeeId: employee._id }),
+      HiringDocument.find({ companyId: req.hiringUser.companyId, employeeId: employee._id }),
+      HiringOfferLetter.find({ companyId: req.hiringUser.companyId, employeeId: employee._id }),
+      HiringExpense.find({ companyId: req.hiringUser.companyId, employeeId: employee._id })
+    ]);
+
+    res.json({ success: true, employee, profile, timesheets, holidays, documents, offerLetters, expenses });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
 router.get('/company/documents/:id/view', requireHiringAuth(['company_admin']), async (req, res) => {
   try {
     const document = await HiringDocument.findOne({
