@@ -16,10 +16,18 @@ const ResumeBuilderUsage = require('../models/ResumeBuilderUsage');
 const Activity = require('../models/Activity');
 const VideoStatus = require('../models/VideoStatus');
 const CustomServiceRequest = require('../models/CustomServiceRequest');
+const HiringEmployee = require('../models/HiringEmployee');
 const { SAM_STUDIOS_SERVICES } = require('../constants/samStudiosServices');
 const { addTokens } = require('../services/tokenService');
 const generatePassword = require('../utils/generatePassword');
 const { sendCredentialsEmail } = require('../utils/sendEmail');
+const {
+  isValidAccessCode,
+  generateUniqueAccessCode,
+  ensureUserAccessCode,
+  ensureEmployeeAccessCode,
+  isAccessCodeAvailable
+} = require('../services/accessCodeService');
 const { upload, uploadToCloudinary } = require('../middleware/cloudinaryUpload');
 const { videoUpload } = require('../middleware/upload');
 const { uploadVideo, deleteFromCloudinary } = require('../services/cloudinary');
@@ -2233,6 +2241,119 @@ router.delete('/custom-service-requests/:id', protect, authorize('admin'), async
     res.json({ success: true, message: 'Custom service request deleted successfully' });
   } catch (error) {
     console.error('Error deleting custom service request:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   GET /api/admin/access-codes
+// @desc    Get access codes for all customers, agents, and employees
+// @access  Private (Admin)
+router.get('/access-codes', protect, authorize('admin'), async (req, res) => {
+  try {
+    const [users, employees] = await Promise.all([
+      User.find({ role: { $in: ['customer', 'agent'] } }).sort({ createdAt: -1 }),
+      HiringEmployee.find({}).sort({ createdAt: -1 })
+    ]);
+
+    const updatedUsers = await Promise.all(users.map(ensureUserAccessCode));
+    const updatedEmployees = await Promise.all(employees.map(ensureEmployeeAccessCode));
+
+    const results = [
+      ...updatedUsers.map(user => ({
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        type: user.role,
+        accessCode: user.accessCode || null,
+        createdAt: user.createdAt
+      })),
+      ...updatedEmployees.map(employee => ({
+        id: employee._id,
+        name: employee.name,
+        email: employee.email,
+        role: 'employee',
+        type: 'employee',
+        accessCode: employee.accessCode || null,
+        companyId: employee.companyId,
+        createdAt: employee.createdAt
+      }))
+    ];
+
+    res.json({ success: true, users: results });
+  } catch (error) {
+    console.error('Error loading access codes:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   PUT /api/admin/access-codes/:userType/:id
+// @desc    Update, revoke, or regenerate a user access code
+// @access  Private (Admin)
+router.put('/access-codes/:userType/:id', protect, authorize('admin'), async (req, res) => {
+  try {
+    const { userType, id } = req.params;
+    const { action, accessCode } = req.body;
+
+    if (!['customer', 'agent', 'employee'].includes(userType)) {
+      return res.status(400).json({ message: 'Invalid user type' });
+    }
+    if (!['set', 'revoke', 'regenerate'].includes(action)) {
+      return res.status(400).json({ message: 'Invalid action' });
+    }
+
+    const isEmployee = userType === 'employee';
+    const record = isEmployee
+      ? await HiringEmployee.findById(id)
+      : await User.findById(id);
+
+    if (!record) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    if (!isEmployee && record.role !== userType) {
+      return res.status(400).json({ message: 'User type mismatch' });
+    }
+
+    if (action === 'set') {
+      if (!isValidAccessCode(accessCode)) {
+        return res.status(400).json({ message: 'Access code must be a 5-digit number' });
+      }
+      const isAvailable = await isAccessCodeAvailable(accessCode, {
+        excludeUserId: isEmployee ? null : record._id,
+        excludeEmployeeId: isEmployee ? record._id : null
+      });
+      if (!isAvailable) {
+        return res.status(400).json({ message: 'Access code is already in use' });
+      }
+      record.accessCode = accessCode;
+    }
+
+    if (action === 'revoke') {
+      record.accessCode = null;
+    }
+
+    if (action === 'regenerate') {
+      record.accessCode = await generateUniqueAccessCode({
+        excludeUserId: isEmployee ? null : record._id,
+        excludeEmployeeId: isEmployee ? record._id : null
+      });
+    }
+
+    await record.save();
+
+    res.json({
+      success: true,
+      user: {
+        id: record._id,
+        name: record.name,
+        email: record.email,
+        role: isEmployee ? 'employee' : record.role,
+        type: isEmployee ? 'employee' : record.role,
+        accessCode: record.accessCode || null
+      }
+    });
+  } catch (error) {
+    console.error('Error updating access code:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 });

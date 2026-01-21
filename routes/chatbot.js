@@ -1,15 +1,26 @@
 const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose');
+const jwt = require('jsonwebtoken');
 const Lead = require('../models/Lead');
 const Activity = require('../models/Activity');
+const User = require('../models/User');
+const HiringEmployee = require('../models/HiringEmployee');
+const generateToken = require('../utils/jwtToken');
 const { generateAIResponse } = require('../services/openaiService');
 const mail = require('../utils/sendEmail');
+const { isValidAccessCode } = require('../services/accessCodeService');
 
 // Track email failures for admin alerts
 const emailFailureCounts = new Map();
 const ADMIN_EMAIL = 'spbajaj25@gmail.com';
 const FRONTEND_URL = process.env.FRONTEND_URL || 'https://mainproduct.vercel.app';
+const HIRING_TOKEN_TYPE = 'hiring-pro';
+const signHiringToken = (payload) => jwt.sign(
+  { ...payload, type: HIRING_TOKEN_TYPE },
+  process.env.JWT_SECRET,
+  { expiresIn: '7d' }
+);
 
 // Helper: Send email with retry logic
 const sendEmailWithRetry = async (to, subject, html, maxRetries = 3) => {
@@ -284,6 +295,70 @@ router.post('/send-chat-transcript', async (req, res) => {
       message: 'Failed to process chat transcript',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
+  }
+});
+
+// @route   POST /api/chatbot/access-code-login
+// @desc    Login via 5-digit access code
+// @access  Public
+router.post('/access-code-login', async (req, res) => {
+  try {
+    const { accessCode } = req.body;
+    const normalizedCode = String(accessCode || '').trim();
+
+    if (!isValidAccessCode(normalizedCode)) {
+      return res.status(400).json({ message: 'Access code must be a 5-digit number' });
+    }
+
+    const user = await User.findOne({
+      accessCode: normalizedCode,
+      role: { $in: ['customer', 'agent'] }
+    });
+
+    if (user) {
+      if (user.isActive === false) {
+        return res.status(403).json({ message: 'This account is currently inactive. Please contact support.' });
+      }
+      const token = generateToken(user._id);
+      return res.json({
+        success: true,
+        tokenType: 'core',
+        token,
+        userType: user.role,
+        dashboardPath: user.role === 'agent' ? '/agent/dashboard' : '/customer/dashboard',
+        user: {
+          id: user._id,
+          name: user.name,
+          email: user.email,
+          role: user.role,
+          tokenBalance: user.tokenBalance,
+          avatar: user.avatar
+        }
+      });
+    }
+
+    const employee = await HiringEmployee.findOne({ accessCode: normalizedCode });
+    if (employee) {
+      const token = signHiringToken({ role: 'employee', companyId: employee.companyId, employeeId: employee._id });
+      return res.json({
+        success: true,
+        tokenType: 'hiring',
+        token,
+        userType: 'employee',
+        dashboardPath: '/hiring-pro/employee',
+        user: {
+          id: employee._id,
+          name: employee.name,
+          email: employee.email,
+          role: 'employee'
+        }
+      });
+    }
+
+    return res.status(404).json({ message: 'Access code not found. Please try again or contact support.' });
+  } catch (error) {
+    console.error('Access code login error:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
   }
 });
 

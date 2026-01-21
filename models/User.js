@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
+const { generateUniqueAccessCode } = require('../services/accessCodeService');
 
 const userSchema = new mongoose.Schema({
   name: {
@@ -160,6 +161,11 @@ const userSchema = new mongoose.Schema({
     enabled: { type: Boolean, default: false },
     updatedAt: { type: Date, default: Date.now }
   }],
+  accessCode: {
+    type: String,
+    unique: true,
+    sparse: true
+  },
   createdAt: {
     type: Date,
     default: Date.now
@@ -203,6 +209,10 @@ userSchema.pre('save', async function(next) {
   // For agents: migrate single serviceCategory to serviceCategories array if needed
   if (this.role === 'agent' && this.serviceCategory && (!this.serviceCategories || this.serviceCategories.length === 0)) {
     this.serviceCategories = [this.serviceCategory];
+  }
+
+  if (this.role !== 'admin' && !this.accessCode) {
+    this.accessCode = await generateUniqueAccessCode({ excludeUserId: this._id });
   }
   
   // Skip password hashing if user is OAuth-only and password is not set

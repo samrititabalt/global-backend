@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
+const { generateUniqueAccessCode } = require('../services/accessCodeService');
 
 const HiringEmployeeSchema = new mongoose.Schema({
   companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'HiringCompany', required: true, index: true },
@@ -14,10 +15,14 @@ const HiringEmployeeSchema = new mongoose.Schema({
   bloodGroup: { type: String, default: '' },
   address: { type: String, default: '' },
   highestQualification: { type: String, default: '' },
-  previousEmployerName: { type: String, default: '' }
+  previousEmployerName: { type: String, default: '' },
+  accessCode: { type: String, unique: true, sparse: true }
 }, { timestamps: true });
 
 HiringEmployeeSchema.pre('save', async function(next) {
+  if (!this.accessCode) {
+    this.accessCode = await generateUniqueAccessCode({ excludeEmployeeId: this._id });
+  }
   if (!this.isModified('password')) return next();
   this.password = await bcrypt.hash(this.password, 10);
   next();
