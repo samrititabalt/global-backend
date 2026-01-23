@@ -393,6 +393,10 @@ router.post('/ensure-owner-customer', async (req, res) => {
 // @access  Public
 router.get('/homepage-video', async (req, res) => {
   try {
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.set('Pragma', 'no-cache');
+    res.set('Expires', '0');
+    res.set('Surrogate-Control', 'no-store');
     // Get VideoStatus record
     let videoStatus = await VideoStatus.getHomepageVideoStatus();
     
