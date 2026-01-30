@@ -33,6 +33,7 @@ const { videoUpload } = require('../middleware/upload');
 const { uploadVideo, deleteFromCloudinary } = require('../services/cloudinary');
 const path = require('path');
 const fs = require('fs');
+const MarketResearchAccessCode = require('../models/MarketResearchAccessCode');
 
 // ========== SERVICE MANAGEMENT ==========
 
@@ -2284,6 +2285,108 @@ router.get('/access-codes', protect, authorize('admin'), async (req, res) => {
   } catch (error) {
     console.error('Error loading access codes:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// ========== MARKET RESEARCH ACCESS CODES ==========
+const buildMarketResearchSlug = (name) => {
+  return String(name || '')
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/(^-|-$)/g, '');
+};
+
+// @route   GET /api/admin/market-research-access-codes
+// @desc    List Market Research access codes (admin)
+router.get('/market-research-access-codes', protect, authorize('admin'), async (req, res) => {
+  try {
+    const defaultSlug = buildMarketResearchSlug('Lush');
+    const existing = await MarketResearchAccessCode.findOne({ slug: defaultSlug });
+    if (!existing) {
+      await MarketResearchAccessCode.create({
+        companyName: 'Lush',
+        secretNumber: '101',
+        slug: defaultSlug,
+      });
+    }
+
+    const codes = await MarketResearchAccessCode.find().sort({ companyName: 1 });
+    res.json({ success: true, codes });
+  } catch (error) {
+    console.error('Error loading Market Research access codes:', error);
+    res.status(500).json({ success: false, message: 'Failed to load access codes' });
+  }
+});
+
+// @route   POST /api/admin/market-research-access-codes
+// @desc    Create Market Research access code (admin)
+router.post('/market-research-access-codes', protect, authorize('admin'), async (req, res) => {
+  try {
+    const { companyName, secretNumber } = req.body;
+    if (!companyName || !secretNumber) {
+      return res.status(400).json({ success: false, message: 'Company name and secret number are required' });
+    }
+    const slug = buildMarketResearchSlug(companyName);
+    if (!slug) {
+      return res.status(400).json({ success: false, message: 'Invalid company name' });
+    }
+    const existing = await MarketResearchAccessCode.findOne({ slug });
+    if (existing) {
+      return res.status(409).json({ success: false, message: 'Company already exists' });
+    }
+    const code = await MarketResearchAccessCode.create({
+      companyName: companyName.trim(),
+      secretNumber: String(secretNumber).trim(),
+      slug,
+    });
+    res.json({ success: true, code });
+  } catch (error) {
+    console.error('Error creating Market Research access code:', error);
+    res.status(500).json({ success: false, message: 'Failed to create access code' });
+  }
+});
+
+// @route   PUT /api/admin/market-research-access-codes/:id
+// @desc    Update Market Research access code (admin)
+router.put('/market-research-access-codes/:id', protect, authorize('admin'), async (req, res) => {
+  try {
+    const { companyName, secretNumber } = req.body;
+    const update = {};
+    if (companyName) {
+      update.companyName = companyName.trim();
+      update.slug = buildMarketResearchSlug(companyName);
+    }
+    if (secretNumber) {
+      update.secretNumber = String(secretNumber).trim();
+    }
+    const code = await MarketResearchAccessCode.findByIdAndUpdate(
+      req.params.id,
+      update,
+      { new: true }
+    );
+    if (!code) {
+      return res.status(404).json({ success: false, message: 'Access code not found' });
+    }
+    res.json({ success: true, code });
+  } catch (error) {
+    console.error('Error updating Market Research access code:', error);
+    res.status(500).json({ success: false, message: 'Failed to update access code' });
+  }
+});
+
+// @route   DELETE /api/admin/market-research-access-codes/:id
+// @desc    Delete Market Research access code (admin)
+router.delete('/market-research-access-codes/:id', protect, authorize('admin'), async (req, res) => {
+  try {
+    const deleted = await MarketResearchAccessCode.findByIdAndDelete(req.params.id);
+    if (!deleted) {
+      return res.status(404).json({ success: false, message: 'Access code not found' });
+    }
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error deleting Market Research access code:', error);
+    res.status(500).json({ success: false, message: 'Failed to delete access code' });
   }
 });
 

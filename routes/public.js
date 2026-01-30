@@ -11,6 +11,7 @@ const Activity = require('../models/Activity');
 const VideoStatus = require('../models/VideoStatus');
 const SharedChart = require('../models/SharedChart');
 const { protect } = require('../middleware/auth');
+const MarketResearchAccessCode = require('../models/MarketResearchAccessCode');
 
 // @route   GET /api/public/plans
 // @desc    Get all available plans (public)
@@ -551,6 +552,49 @@ router.get('/shared-chart/:shareId', async (req, res) => {
       success: false,
       message: 'Failed to retrieve shared chart',
       error: error.message,
+    });
+  }
+});
+
+// @route   POST /api/public/market-research/validate
+// @desc    Validate Market Research Platform access
+// @access  Public
+router.post('/market-research/validate', async (req, res) => {
+  try {
+    const { companyName, secretNumber } = req.body;
+    if (!companyName || !secretNumber) {
+      return res.status(400).json({
+        success: false,
+        message: 'Company name and secret number are required',
+      });
+    }
+
+    const normalizedName = String(companyName).trim();
+    const normalizedSecret = String(secretNumber).trim();
+    const escapedName = normalizedName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+    const code = await MarketResearchAccessCode.findOne({
+      companyName: { $regex: new RegExp(`^${escapedName}$`, 'i') },
+      secretNumber: normalizedSecret,
+    });
+
+    if (!code) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid company name or secret number',
+      });
+    }
+
+    res.json({
+      success: true,
+      companyName: code.companyName,
+      slug: code.slug,
+    });
+  } catch (error) {
+    console.error('Error validating Market Research access:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to validate access',
     });
   }
 });
