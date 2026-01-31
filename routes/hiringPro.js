@@ -19,7 +19,7 @@ const HiringEmployee = require('../models/HiringEmployee');
 const HiringOfferLetter = require('../models/HiringOfferLetter');
 const User = require('../models/User');
 const { generateAIResponse, generateSalaryTemplate, generateExpenseTemplate, extractExpenseFieldsFromImage } = require('../services/openaiService');
-const { mail } = require('../utils/sendEmail');
+const { mail, mailWithAttachment } = require('../utils/sendEmail');
 const HiringHoliday = require('../models/HiringHoliday');
 const HiringTimesheet = require('../models/HiringTimesheet');
 const HiringDocument = require('../models/HiringDocument');
@@ -1106,6 +1106,68 @@ router.get('/company/offer-letters/:id/download', requireHiringAuth(['company_ad
   } catch (error) {
     console.error('Offer letter download error:', error);
     return res.status(500).json({ message: 'Unable to load offer letter PDF' });
+  }
+});
+
+router.post('/company/offer-letters/:id/send', requireHiringAuth(['company_admin']), async (req, res) => {
+  try {
+    const offerLetter = await HiringOfferLetter.findOne({
+      _id: req.params.id,
+      companyId: req.hiringUser.companyId
+    });
+    if (!offerLetter) return res.status(404).json({ message: 'Document not found' });
+
+    if (!offerLetter.employeeId) {
+      return res.status(400).json({ message: 'No employee linked to this document' });
+    }
+
+    const employee = await HiringEmployee.findById(offerLetter.employeeId);
+    if (!employee?.email) {
+      return res.status(404).json({ message: 'Employee email not found' });
+    }
+
+    const signedUrl = offerLetter.filePublicId
+      ? getSignedDownloadUrl(offerLetter.filePublicId, 'pdf', { resource_type: 'image', type: 'upload' })
+      : offerLetter.fileUrl;
+    if (!signedUrl) {
+      return res.status(404).json({ message: 'Document file not available' });
+    }
+
+    const fileResponse = await axios.get(signedUrl, { responseType: 'arraybuffer' });
+    const fileBuffer = Buffer.from(fileResponse.data);
+    const docTypeLabel = offerLetter.customDocumentType || offerLetter.documentType || 'Document';
+    const isSalarySlip = /salary|payslip|pay slip/i.test(docTypeLabel);
+    const subject = isSalarySlip
+      ? 'Your Salary Slip'
+      : `Your ${docTypeLabel}`;
+    const html = `
+      <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+        <p>Hello ${employee.name || 'there'},</p>
+        <p>${isSalarySlip
+          ? 'Please find attached your salary slip for the month completed. You can contact us if you have questions.'
+          : `Please find attached your ${docTypeLabel}. You can contact us if you have questions.`}</p>
+        <p>Thanks,<br/>${offerLetter.companyName || 'HR Team'}</p>
+      </div>
+    `;
+    const attachmentName = `document-${(offerLetter.candidateName || 'document').replace(/\s+/g, '-')}.pdf`;
+
+    const result = await mailWithAttachment(
+      employee.email,
+      subject,
+      html,
+      [{ content: fileBuffer.toString('base64'), name: attachmentName, contentType: 'application/pdf' }],
+      'tabaltllp@gmail.com',
+      'Tabalt Hiring Pro'
+    );
+
+    if (!result.success) {
+      return res.status(500).json({ message: result.error || 'Unable to send email' });
+    }
+
+    return res.json({ success: true, message: 'Document sent successfully' });
+  } catch (error) {
+    console.error('Offer letter send error:', error);
+    return res.status(500).json({ message: 'Unable to send document email' });
   }
 });
 

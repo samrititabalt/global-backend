@@ -46,6 +46,61 @@ const mail = async (receiverEmail, subject, html, customSenderEmail = null, cust
 };
 
 /**
+ * Send email with attachments using Brevo API
+ * @param {string} receiverEmail
+ * @param {string} subject
+ * @param {string} html
+ * @param {Array<{content: string, name: string, contentType?: string}>} attachments
+ * @param {string|null} customSenderEmail
+ * @param {string|null} customSenderName
+ */
+const mailWithAttachment = async (
+  receiverEmail,
+  subject,
+  html,
+  attachments = [],
+  customSenderEmail = null,
+  customSenderName = null
+) => {
+  try {
+    const brevoApiKey = process.env.BREVO_API_KEY;
+    if (!brevoApiKey) {
+      throw new Error('BREVO_API_KEY is required in .env file');
+    }
+
+    const senderEmail = customSenderEmail || process.env.BREVO_SENDER_EMAIL || process.env.EMAIL_USER || process.env.USER_EMAIL;
+    const senderName = customSenderName || process.env.BREVO_SENDER_NAME || 'GlobalCare Support System';
+
+    if (!senderEmail) {
+      throw new Error('BREVO_SENDER_EMAIL (or EMAIL_USER/USER_EMAIL) is required in .env file');
+    }
+
+    const apiInstance = new brevo.TransactionalEmailsApi();
+    apiInstance.setApiKey(brevo.TransactionalEmailsApiApiKeys.apiKey, brevoApiKey);
+
+    const sendSmtpEmail = new brevo.SendSmtpEmail();
+    sendSmtpEmail.subject = subject;
+    sendSmtpEmail.htmlContent = html;
+    sendSmtpEmail.sender = { name: senderName, email: senderEmail };
+    sendSmtpEmail.to = [{ email: receiverEmail }];
+    if (attachments && attachments.length) {
+      sendSmtpEmail.attachment = attachments.map((attachment) => ({
+        content: attachment.content,
+        name: attachment.name,
+        contentType: attachment.contentType || 'application/pdf'
+      }));
+    }
+
+    const data = await apiInstance.sendTransacEmail(sendSmtpEmail);
+    console.log('Email sent with attachment:', data.messageId);
+    return { success: true, messageId: data.messageId };
+  } catch (error) {
+    console.error('Error sending email with attachment:', error.message);
+    return { success: false, error: error.message };
+  }
+};
+
+/**
  * Send credentials email to new users
  * @param {string} email - Recipient email
  * @param {string} password - Generated password
@@ -417,6 +472,7 @@ const sendPasswordResetOTPEmail = async (email, name, otpCode, role) => {
 module.exports = {
   mail,
   sendEmail: mail, // Alias for backward compatibility
+  mailWithAttachment,
   sendCredentialsEmail,
   sendPasswordResetOTPEmail,
 };
