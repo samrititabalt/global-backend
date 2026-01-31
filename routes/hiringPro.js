@@ -26,6 +26,7 @@ const HiringDocument = require('../models/HiringDocument');
 const HiringEmployeeProfile = require('../models/HiringEmployeeProfile');
 const HiringExpense = require('../models/HiringExpense');
 const HiringExpenseTemplate = require('../models/HiringExpenseTemplate');
+const HiringSalaryTemplate = require('../models/HiringSalaryTemplate');
 
 const HIRING_TOKEN_TYPE = 'hiring-pro';
 const HIRING_SUPERADMIN_EMAIL = process.env.HIRING_SUPERADMIN_EMAIL || 'superadmin@tabalt.co.uk';
@@ -267,7 +268,12 @@ const buildDocumentPdfBuffer = async (company, document, content) => {
   doc.on('data', (chunk) => chunks.push(chunk));
 
   const logoUrl = document.documentLogoUrl || company?.logoUrl;
-  const isNda = (document.documentTypeLabel || document.documentType || '').toLowerCase().includes('nda');
+  const docTypeLabel = document.documentTypeLabel || document.documentType || '';
+  const isNda = docTypeLabel.toLowerCase().includes('nda');
+  const isSalarySlip = /salary|payslip|pay slip/i.test(docTypeLabel);
+  const companyFontSize = isSalarySlip ? 14 : 16;
+  const titleFontSize = isSalarySlip ? 12 : 14;
+  const bodyFontSize = isSalarySlip ? 10 : 12;
   const sanitizedContent = sanitizeOfferContent(content || '');
   const pageChunks = isNda
     ? sanitizedContent.split(/=== Page \d+ ===/i).map((page) => page.trim()).filter(Boolean)
@@ -291,16 +297,16 @@ const buildDocumentPdfBuffer = async (company, document, content) => {
 
     if (pageIndex === 0) {
       if (company?.name) {
-        doc.fontSize(16).text(company.name);
+        doc.fontSize(companyFontSize).text(company.name);
       }
-      doc.moveDown(0.5);
+      doc.moveDown(isSalarySlip ? 0.2 : 0.5);
 
-      doc.fontSize(14).text(document.documentTypeLabel || document.documentType || 'Document', { underline: true });
-      doc.moveDown();
+      doc.fontSize(titleFontSize).text(docTypeLabel || 'Document', { underline: true });
+      doc.moveDown(isSalarySlip ? 0.4 : 1);
       if (document.documentDate) {
-        doc.fontSize(12).text(`Date: ${document.documentDate}`);
+        doc.fontSize(bodyFontSize).text(`Date: ${document.documentDate}`);
       }
-      doc.fontSize(12).text(`Candidate: ${document.candidateName}`);
+      doc.fontSize(bodyFontSize).text(`Candidate: ${document.candidateName}`);
       if (document.title) {
         doc.text(`Title: ${document.title}`);
       }
@@ -310,21 +316,21 @@ const buildDocumentPdfBuffer = async (company, document, content) => {
       if (document.documentTitle) {
         doc.text(`Document Title: ${document.documentTitle}`);
       }
-      doc.moveDown();
+      doc.moveDown(isSalarySlip ? 0.4 : 1);
     }
 
     const lines = pageContent.split(/\r?\n/);
     lines.forEach((line) => {
       if (!line.trim()) {
-        doc.moveDown();
+        doc.moveDown(isSalarySlip ? 0.4 : 1);
         return;
       }
-      doc.text(line);
+      doc.fontSize(bodyFontSize).text(line, { lineGap: isSalarySlip ? -1 : 0 });
     });
 
     if (pageIndex === pageChunks.length - 1) {
-      doc.moveDown();
-      doc.text('Signatures', { underline: true });
+      doc.moveDown(isSalarySlip ? 0.4 : 1);
+      doc.fontSize(bodyFontSize).text('Signatures', { underline: true });
 
       if (document.adminSignatureUrl) {
         try {
@@ -824,6 +830,7 @@ Date: Use today's date in ${dateFormat} format
 
 Requirements:
 - Use UK or US legal/HR terminology appropriate to the document type.
+- If this is a salary slip, keep it to one page only with concise sections.
 - Ensure the document is ready for sharing (no placeholders, no asterisks, no brackets).
 - If a required field is missing, fill with realistic dummy data and list it in "dummyFields".
 - Return JSON ONLY:
@@ -947,6 +954,120 @@ router.post(
       res.json({ success: true, offerLetter });
     } catch (error) {
       console.error('Document save error:', error);
+      res.status(500).json({ message: 'Server error', error: error.message });
+    }
+  }
+);
+
+router.put(
+  '/company/offer-letters/:id',
+  requireHiringAuth(['company_admin']),
+  upload.fields([{ name: 'documentLogo', maxCount: 1 }, { name: 'signature', maxCount: 1 }]),
+  uploadToCloudinary,
+  async (req, res) => {
+    try {
+      const offerLetter = await HiringOfferLetter.findOne({
+        _id: req.params.id,
+        companyId: req.hiringUser.companyId
+      });
+      if (!offerLetter) return res.status(404).json({ message: 'Document not found' });
+
+      const {
+        candidateName,
+        title,
+        employeeId,
+        employeeCode,
+        documentType,
+        customDocumentType,
+        documentDate,
+        content
+      } = req.body;
+
+      const company = await HiringCompany.findById(req.hiringUser.companyId);
+      if (!company) return res.status(404).json({ message: 'Company not found' });
+
+      const documentLogo = req.uploadedFiles?.find(file => file.type === 'documentLogo');
+      const signatureFile = req.uploadedFiles?.find(file => file.type === 'signature');
+
+      const resolvedCandidateName = candidateName || offerLetter.candidateName;
+      const resolvedTitle = title || offerLetter.documentTitle || offerLetter.roleTitle || '';
+      const resolvedDocumentType = documentType || offerLetter.documentType || 'Offer Letter';
+      const resolvedCustomType = customDocumentType || offerLetter.customDocumentType || '';
+      const docTypeLabel = resolvedDocumentType === 'Others' && resolvedCustomType ? resolvedCustomType : resolvedDocumentType;
+      const resolvedContent = sanitizeOfferContent(content || offerLetter.content || '');
+      if (!resolvedCandidateName || !resolvedTitle || !resolvedDocumentType || !resolvedContent) {
+        return res.status(400).json({ message: 'Missing required fields' });
+      }
+
+      let resolvedEmployeeCode = employeeCode || offerLetter.employeeCode || '';
+      if (employeeId && !resolvedEmployeeCode) {
+        const employeeRecord = await HiringEmployee.findById(employeeId);
+        if (employeeRecord) {
+          await ensureEmployeeCode(employeeRecord);
+          resolvedEmployeeCode = employeeRecord.employeeCode || '';
+        }
+      }
+
+      const resolvedDocDate = documentDate || offerLetter.documentDate || formatDocumentDate(new Date(), getDocumentDateFormat(docTypeLabel));
+      const resolvedLogoUrl = documentLogo?.url || offerLetter.documentLogoUrl || company.logoUrl || null;
+      const resolvedSignatureUrl = signatureFile?.url || offerLetter.adminSignatureUrl || '';
+
+      const pdfBuffer = await buildDocumentPdfBuffer(company, {
+        candidateName: resolvedCandidateName,
+        title: resolvedTitle,
+        employeeCode: resolvedEmployeeCode,
+        documentType: resolvedDocumentType,
+        documentTypeLabel: docTypeLabel,
+        documentTitle: resolvedTitle,
+        documentDate: resolvedDocDate,
+        documentLogoUrl: resolvedLogoUrl,
+        adminSignatureUrl: resolvedSignatureUrl,
+        employeeSignatureUrl: offerLetter.employeeSignatureUrl || ''
+      }, resolvedContent);
+
+      const uploadResult = await uploadRawToCloudinary(pdfBuffer, {
+        folder: `hiring-pro/documents/${company._id}`,
+        resource_type: 'image',
+        format: 'pdf',
+        public_id: `document-${Date.now()}`,
+        content_type: 'application/pdf',
+        type: 'upload'
+      });
+
+      if (offerLetter.filePublicId) {
+        try {
+          await deleteFromCloudinary(offerLetter.filePublicId, 'raw');
+        } catch (error) {
+          console.error('Document delete error (raw):', error);
+        }
+        try {
+          await deleteFromCloudinary(offerLetter.filePublicId, 'image');
+        } catch (error) {
+          console.error('Document delete error (image):', error);
+        }
+      }
+
+      offerLetter.candidateName = resolvedCandidateName;
+      offerLetter.documentTitle = resolvedTitle;
+      offerLetter.documentType = resolvedDocumentType;
+      offerLetter.customDocumentType = resolvedCustomType;
+      offerLetter.employeeId = employeeId || offerLetter.employeeId || null;
+      offerLetter.employeeCode = resolvedEmployeeCode;
+      offerLetter.documentDate = resolvedDocDate;
+      offerLetter.content = resolvedContent;
+      offerLetter.documentLogoUrl = resolvedLogoUrl;
+      offerLetter.adminSignatureUrl = resolvedSignatureUrl;
+      if (signatureFile?.publicId) offerLetter.adminSignaturePublicId = signatureFile.publicId;
+      offerLetter.fileUrl = uploadResult.secure_url;
+      offerLetter.filePublicId = uploadResult.public_id;
+      offerLetter.companyName = company.name || offerLetter.companyName;
+      offerLetter.signingAuthorityName = company.signingAuthority?.name || offerLetter.signingAuthorityName;
+      offerLetter.signingAuthorityTitle = company.signingAuthority?.title || offerLetter.signingAuthorityTitle;
+      await offerLetter.save();
+
+      res.json({ success: true, offerLetter });
+    } catch (error) {
+      console.error('Document update error:', error);
       res.status(500).json({ message: 'Server error', error: error.message });
     }
   }
@@ -1811,10 +1932,47 @@ router.post('/company/employees/:id/salary-breakup/generate', requireHiringAuth(
     });
     if (!employee) return res.status(404).json({ message: 'Employee not found' });
 
+    const existingTemplate = await HiringSalaryTemplate.findOne({ companyId: req.hiringUser.companyId });
+    if (existingTemplate?.salaryBreakup?.components?.length) {
+      return res.json({ success: true, salaryBreakup: normalizeSalaryBreakup(existingTemplate.salaryBreakup), source: 'template' });
+    }
+
     const currency = req.body?.currency || 'USD';
     const template = await generateSalaryTemplate(currency);
     const normalized = normalizeSalaryBreakup(template);
     res.json({ success: true, salaryBreakup: normalized });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+router.get('/company/salary-template', requireHiringAuth(['company_admin']), async (req, res) => {
+  try {
+    const template = await HiringSalaryTemplate.findOne({ companyId: req.hiringUser.companyId });
+    res.json({ success: true, template: template || null });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+router.put('/company/salary-template', requireHiringAuth(['company_admin']), async (req, res) => {
+  try {
+    const normalized = normalizeSalaryBreakup(req.body?.salaryBreakup || {});
+    const template = await HiringSalaryTemplate.findOneAndUpdate(
+      { companyId: req.hiringUser.companyId },
+      {
+        companyId: req.hiringUser.companyId,
+        salaryBreakup: normalized,
+        updatedBy: {
+          id: req.hiringUser.adminId || req.hiringUser.userId || req.hiringUser.companyId,
+          name: req.hiringUser.name || 'Company Admin',
+          role: 'company_admin'
+        },
+        updatedAt: new Date()
+      },
+      { new: true, upsert: true, setDefaultsOnInsert: true }
+    );
+    res.json({ success: true, template });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
   }
