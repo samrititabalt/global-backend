@@ -5,6 +5,7 @@ const { body, validationResult } = require('express-validator');
 const User = require('../models/User');
 const Service = require('../models/Service');
 const Plan = require('../models/Plan');
+const { DEFAULT_PLANS } = require('../constants/defaultPlans');
 const Transaction = require('../models/Transaction');
 const ChatSession = require('../models/ChatSession');
 const Message = require('../models/Message');
@@ -205,7 +206,7 @@ router.post('/plans', protect, authorize('admin'), [
 // @access  Private (Admin)
 router.get('/plans', protect, authorize('admin'), async (req, res) => {
   try {
-    const plans = await Plan.find().sort({ createdAt: -1 });
+    const plans = await Plan.find({ isActive: true }).sort({ createdAt: -1 });
     res.json({ success: true, plans });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
@@ -240,10 +241,19 @@ router.put('/plans/:id', protect, authorize('admin'), async (req, res) => {
 // @access  Private (Admin)
 router.delete('/plans/:id', protect, authorize('admin'), async (req, res) => {
   try {
-    const plan = await Plan.findByIdAndDelete(req.params.id);
+    const plan = await Plan.findById(req.params.id);
     if (!plan) {
       return res.status(404).json({ message: 'Plan not found' });
     }
+    const isDefaultPlan = DEFAULT_PLANS.some(
+      (defaultPlan) => defaultPlan.name.toLowerCase() === plan.name.toLowerCase()
+    );
+    if (isDefaultPlan) {
+      plan.isActive = false;
+      await plan.save();
+      return res.json({ success: true, message: 'Plan deactivated' });
+    }
+    await plan.deleteOne();
     res.json({ success: true, message: 'Plan deleted' });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
