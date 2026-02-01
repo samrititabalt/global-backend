@@ -343,7 +343,9 @@ Rules:
 - You may edit text, images, and lists.
 - You may add or remove slides, but each slide must include a valid "type".
 - Allowed types: agenda, companyProfile, portfolioGrid, askSamOverview, howWorks, caseStudies, serviceOptions, whyChoose.
+- Images must be URLs placed in slide.image.url or cards[].icon (URL ok).
 - Keep content professional and market-research focused.
+- If you only update one slide, still return that slide with its id.
 
 Current slides JSON:
 ${JSON.stringify(slides)}
@@ -354,14 +356,48 @@ ${instruction}
 
     const aiResponse = await generateAIResponse(prompt, [], 'general');
     const parsed = parseJsonWithFallback(aiResponse);
-    if (!parsed?.slides || !Array.isArray(parsed.slides)) {
+    const parsedSlides = Array.isArray(parsed?.slides)
+      ? parsed.slides
+      : Array.isArray(parsed) ? parsed : null;
+    if (!parsedSlides || !Array.isArray(parsedSlides)) {
       return res.status(400).json({ message: 'AI response invalid. Please try again.' });
     }
+
+    const sanitizedUpdates = parsedSlides.map((slide) => {
+      const clean = Object.entries(slide || {}).reduce((acc, [key, value]) => {
+        if (value !== undefined) acc[key] = value;
+        return acc;
+      }, {});
+      return clean;
+    });
+
+    const updatedById = new Map(sanitizedUpdates.map((slide) => [slide.id, slide]));
+    const mergedSlides = slides.map((slide) => {
+      const update = updatedById.get(slide.id);
+      if (!update) return slide;
+      return {
+        ...slide,
+        ...update,
+        id: slide.id,
+        type: update.type || slide.type
+      };
+    });
+
+    const existingIds = new Set(slides.map((slide) => slide.id));
+    const appendedSlides = sanitizedUpdates
+      .filter((slide) => !existingIds.has(slide.id))
+      .map((slide, index) => ({
+        ...slide,
+        id: slide.id || slides.length + index + 1,
+        type: slide.type || 'agenda'
+      }));
+
+    const finalSlides = [...mergedSlides, ...appendedSlides];
 
     const deck = await FirstCallDeckMR.findOneAndUpdate(
       {},
       {
-        slides: parsed.slides,
+        slides: finalSlides,
         updatedBy: {
           id: req.user?._id,
           name: req.user?.name || 'Admin',
@@ -377,6 +413,28 @@ ${instruction}
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 });
+
+// @route   POST /api/admin/first-call-deck-mr/upload-image
+// @desc    Upload image for MR first call deck
+// @access  Private (Admin)
+router.post(
+  '/first-call-deck-mr/upload-image',
+  protect,
+  authorize('admin'),
+  upload.fields([{ name: 'image', maxCount: 1 }]),
+  uploadToCloudinary,
+  async (req, res) => {
+    try {
+      const uploaded = req.uploadedFiles?.find((file) => file.type === 'image');
+      if (!uploaded?.url) {
+        return res.status(400).json({ message: 'No image uploaded' });
+      }
+      res.json({ success: true, url: uploaded.url, publicId: uploaded.publicId || null });
+    } catch (error) {
+      res.status(500).json({ message: 'Server error', error: error.message });
+    }
+  }
+);
 
 // ========== AGENT MANAGEMENT ==========
 
