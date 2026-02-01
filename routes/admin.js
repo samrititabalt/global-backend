@@ -45,13 +45,23 @@ const parseJsonWithFallback = (text) => {
   try {
     return JSON.parse(text);
   } catch (error) {
-    const match = text.match(/\{[\s\S]*\}/);
-    if (!match) return null;
-    try {
-      return JSON.parse(match[0]);
-    } catch (innerError) {
-      return null;
+    const objectMatch = text.match(/\{[\s\S]*\}/);
+    if (objectMatch) {
+      try {
+        return JSON.parse(objectMatch[0]);
+      } catch (innerError) {
+        // continue to array fallback
+      }
     }
+    const arrayMatch = text.match(/\[[\s\S]*\]/);
+    if (arrayMatch) {
+      try {
+        return JSON.parse(arrayMatch[0]);
+      } catch (innerError) {
+        return null;
+      }
+    }
+    return null;
   }
 };
 
@@ -323,13 +333,22 @@ router.put('/first-call-deck-mr', protect, authorize('admin'), async (req, res) 
 // @access  Private (Admin)
 router.post('/first-call-deck-mr/ai-edit', protect, authorize('admin'), async (req, res) => {
   try {
-    const instruction = req.body?.instruction || '';
+    const instruction = typeof req.body?.instruction === 'string' ? req.body.instruction : '';
     const slides = Array.isArray(req.body?.slides) ? req.body.slides : [];
     if (!instruction.trim()) {
       return res.status(400).json({ message: 'Instruction is required' });
     }
     if (!slides.length) {
       return res.status(400).json({ message: 'Slides data is required' });
+    }
+    const hasValidSlides = slides.every((slide) => slide && typeof slide === 'object');
+    if (!hasValidSlides) {
+      return res.status(400).json({ message: 'Slides must be an array of objects' });
+    }
+    if (!process.env.OPENAI_API_KEY || !process.env.OPENAI_API_KEY.trim()) {
+      return res.status(503).json({
+        message: 'AI is not configured. Please set OPENAI_API_KEY and try again.'
+      });
     }
 
     const prompt = `
@@ -357,23 +376,32 @@ ${instruction}
 `;
 
     const aiResponse = await generateAIResponse(prompt, [], 'general');
+    if (!aiResponse || typeof aiResponse !== 'string') {
+      return res.status(502).json({ message: 'AI response was empty. Please try again.' });
+    }
     const parsed = parseJsonWithFallback(aiResponse);
     const parsedSlides = Array.isArray(parsed?.slides)
       ? parsed.slides
       : Array.isArray(parsed) ? parsed : null;
     if (!parsedSlides || !Array.isArray(parsedSlides)) {
-      return res.status(400).json({ message: 'AI response invalid. Please try again.' });
+      return res.status(502).json({
+        message: 'AI response invalid. Please try again or simplify the instruction.'
+      });
     }
 
     const sanitizedUpdates = parsedSlides.map((slide) => {
-      const clean = Object.entries(slide || {}).reduce((acc, [key, value]) => {
+      if (!slide || typeof slide !== 'object') return null;
+      return Object.entries(slide).reduce((acc, [key, value]) => {
         if (value !== undefined) acc[key] = value;
         return acc;
       }, {});
-      return clean;
     });
+    const filteredUpdates = sanitizedUpdates.filter(Boolean);
+    if (!filteredUpdates.length) {
+      return res.status(502).json({ message: 'AI response invalid. No slide updates found.' });
+    }
 
-    const updatedById = new Map(sanitizedUpdates.map((slide) => [slide.id, slide]));
+    const updatedById = new Map(filteredUpdates.map((slide) => [slide.id, slide]));
     const mergedSlides = slides.map((slide) => {
       const update = updatedById.get(slide.id);
       if (!update) return slide;
@@ -386,7 +414,7 @@ ${instruction}
     });
 
     const existingIds = new Set(slides.map((slide) => slide.id));
-    const appendedSlides = sanitizedUpdates
+    const appendedSlides = filteredUpdates
       .filter((slide) => !existingIds.has(slide.id))
       .map((slide, index) => ({
         ...slide,
