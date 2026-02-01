@@ -35,6 +35,24 @@ const { uploadVideo, deleteFromCloudinary } = require('../services/cloudinary');
 const path = require('path');
 const fs = require('fs');
 const MarketResearchAccessCode = require('../models/MarketResearchAccessCode');
+const FirstCallDeckMR = require('../models/FirstCallDeckMR');
+const { generateAIResponse } = require('../services/openaiService');
+const { DEFAULT_PLANS } = require('../constants/defaultPlans');
+
+const parseJsonWithFallback = (text) => {
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    const match = text.match(/\{[\s\S]*\}/);
+    if (!match) return null;
+    try {
+      return JSON.parse(match[0]);
+    } catch (innerError) {
+      return null;
+    }
+  }
+};
 
 // ========== SERVICE MANAGEMENT ==========
 
@@ -255,6 +273,107 @@ router.delete('/plans/:id', protect, authorize('admin'), async (req, res) => {
     }
     await plan.deleteOne();
     res.json({ success: true, message: 'Plan deleted' });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// ========== FIRST CALL DECK (MARKET RESEARCH) ==========
+
+// @route   GET /api/admin/first-call-deck-mr
+// @desc    Get MR first call deck
+// @access  Private (Admin)
+router.get('/first-call-deck-mr', protect, authorize('admin'), async (req, res) => {
+  try {
+    const deck = await FirstCallDeckMR.findOne({});
+    res.json({ success: true, deck });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   PUT /api/admin/first-call-deck-mr
+// @desc    Save MR first call deck
+// @access  Private (Admin)
+router.put('/first-call-deck-mr', protect, authorize('admin'), async (req, res) => {
+  try {
+    const slides = Array.isArray(req.body?.slides) ? req.body.slides : [];
+    const deck = await FirstCallDeckMR.findOneAndUpdate(
+      {},
+      {
+        slides,
+        updatedBy: {
+          id: req.user?._id,
+          name: req.user?.name || 'Admin',
+          role: 'admin'
+        },
+        updatedAt: new Date()
+      },
+      { new: true, upsert: true }
+    );
+    res.json({ success: true, deck });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   POST /api/admin/first-call-deck-mr/ai-edit
+// @desc    AI edit MR first call deck
+// @access  Private (Admin)
+router.post('/first-call-deck-mr/ai-edit', protect, authorize('admin'), async (req, res) => {
+  try {
+    const instruction = req.body?.instruction || '';
+    const slides = Array.isArray(req.body?.slides) ? req.body.slides : [];
+    if (!instruction.trim()) {
+      return res.status(400).json({ message: 'Instruction is required' });
+    }
+    if (!slides.length) {
+      return res.status(400).json({ message: 'Slides data is required' });
+    }
+
+    const prompt = `
+You are editing a Market Research first-call deck. Keep the same slide structure and layout types.
+Return JSON only with this shape:
+{
+  "summary": "Short summary of edits",
+  "slides": [ ...updatedSlides ]
+}
+
+Rules:
+- Preserve slide layout by keeping each slide "type".
+- You may edit text, images, and lists.
+- You may add or remove slides, but each slide must include a valid "type".
+- Allowed types: agenda, companyProfile, portfolioGrid, askSamOverview, howWorks, caseStudies, serviceOptions, whyChoose.
+- Keep content professional and market-research focused.
+
+Current slides JSON:
+${JSON.stringify(slides)}
+
+Instruction:
+${instruction}
+`;
+
+    const aiResponse = await generateAIResponse(prompt, [], 'general');
+    const parsed = parseJsonWithFallback(aiResponse);
+    if (!parsed?.slides || !Array.isArray(parsed.slides)) {
+      return res.status(400).json({ message: 'AI response invalid. Please try again.' });
+    }
+
+    const deck = await FirstCallDeckMR.findOneAndUpdate(
+      {},
+      {
+        slides: parsed.slides,
+        updatedBy: {
+          id: req.user?._id,
+          name: req.user?.name || 'Admin',
+          role: 'admin'
+        },
+        updatedAt: new Date()
+      },
+      { new: true, upsert: true }
+    );
+
+    res.json({ success: true, deck, summary: parsed?.summary || 'Deck updated.' });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
   }
