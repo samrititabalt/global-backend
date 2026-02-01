@@ -5,7 +5,6 @@ const { body, validationResult } = require('express-validator');
 const User = require('../models/User');
 const Service = require('../models/Service');
 const Plan = require('../models/Plan');
-const { DEFAULT_PLANS } = require('../constants/defaultPlans');
 const Transaction = require('../models/Transaction');
 const ChatSession = require('../models/ChatSession');
 const Message = require('../models/Message');
