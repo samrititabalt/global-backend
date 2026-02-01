@@ -263,7 +263,6 @@ router.delete('/plans/:id', protect, authorize('admin'), async (req, res) => {
   }
 });
 
-<<<<<<< HEAD
 // ========== FIRST CALL DECK (MARKET RESEARCH) ==========
 
 // @route   GET /api/admin/first-call-deck-mr
@@ -447,8 +446,6 @@ router.post(
   }
 );
 
-=======
->>>>>>> parent of cf6a622 (new deck on mr rb)
 // ========== AGENT MANAGEMENT ==========
 
 // @route   POST /api/admin/agents
