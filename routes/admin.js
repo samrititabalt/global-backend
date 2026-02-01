@@ -39,6 +39,22 @@ const { generateAIResponse } = require('../services/openaiService');
 const { DEFAULT_PLANS } = require('../constants/defaultPlans');
 const { DEFAULT_MARKET_RESEARCH_DECK } = require('../data/defaultMarketResearchDeck');
 
+// Helper to parse JSON with fallback (used for AI deck edits)
+const parseJsonWithFallback = (text) => {
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    const match = text.match(/\{[\s\S]*\}/);
+    if (!match) return null;
+    try {
+      return JSON.parse(match[0]);
+    } catch (innerError) {
+      return null;
+    }
+  }
+};
+
 // ========== SERVICE MANAGEMENT ==========
 
 // @route   POST /api/admin/services
