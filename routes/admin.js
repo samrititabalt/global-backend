@@ -34,6 +34,10 @@ const { uploadVideo, deleteFromCloudinary } = require('../services/cloudinary');
 const path = require('path');
 const fs = require('fs');
 const MarketResearchAccessCode = require('../models/MarketResearchAccessCode');
+const FirstCallDeckMR = require('../models/FirstCallDeckMR');
+const { generateAIResponse } = require('../services/openaiService');
+const { DEFAULT_PLANS } = require('../constants/defaultPlans');
+const { DEFAULT_MARKET_RESEARCH_DECK } = require('../data/defaultMarketResearchDeck');
 
 // ========== SERVICE MANAGEMENT ==========
 
@@ -392,6 +396,30 @@ ${instruction}
     );
 
     res.json({ success: true, deck, summary: parsed?.summary || 'Deck updated.' });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   POST /api/admin/first-call-deck-mr/reset
+// @desc    Reset MR deck to defaults
+// @access  Private (Admin)
+router.post('/first-call-deck-mr/reset', protect, authorize('admin'), async (req, res) => {
+  try {
+    const deck = await FirstCallDeckMR.findOneAndUpdate(
+      {},
+      {
+        slides: DEFAULT_MARKET_RESEARCH_DECK,
+        updatedBy: {
+          id: req.user?._id,
+          name: req.user?.name || 'Admin',
+          role: 'admin'
+        },
+        updatedAt: new Date()
+      },
+      { new: true, upsert: true }
+    );
+    res.json({ success: true, deck });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
   }
