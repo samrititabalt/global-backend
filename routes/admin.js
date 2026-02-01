@@ -34,24 +34,6 @@ const { uploadVideo, deleteFromCloudinary } = require('../services/cloudinary');
 const path = require('path');
 const fs = require('fs');
 const MarketResearchAccessCode = require('../models/MarketResearchAccessCode');
-const FirstCallDeckMR = require('../models/FirstCallDeckMR');
-const { generateAIResponse } = require('../services/openaiService');
-const { DEFAULT_PLANS } = require('../constants/defaultPlans');
-
-const parseJsonWithFallback = (text) => {
-  if (!text) return null;
-  try {
-    return JSON.parse(text);
-  } catch (error) {
-    const match = text.match(/\{[\s\S]*\}/);
-    if (!match) return null;
-    try {
-      return JSON.parse(match[0]);
-    } catch (innerError) {
-      return null;
-    }
-  }
-};
 
 // ========== SERVICE MANAGEMENT ==========
 
@@ -277,6 +259,7 @@ router.delete('/plans/:id', protect, authorize('admin'), async (req, res) => {
   }
 });
 
+<<<<<<< HEAD
 // ========== FIRST CALL DECK (MARKET RESEARCH) ==========
 
 // @route   GET /api/admin/first-call-deck-mr
@@ -436,6 +419,8 @@ router.post(
   }
 );
 
+=======
+>>>>>>> parent of cf6a622 (new deck on mr rb)
 // ========== AGENT MANAGEMENT ==========
 
 // @route   POST /api/admin/agents

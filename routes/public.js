@@ -4,7 +4,6 @@ const path = require('path');
 const fs = require('fs');
 const Plan = require('../models/Plan');
 const { ensureDefaultPlans, formatPlanForResponse } = require('../utils/planDefaults');
-const FirstCallDeckMR = require('../models/FirstCallDeckMR');
 const mail = require('../utils/sendEmail');
 const { generateAIResponse } = require('../services/openaiService');
 const Lead = require('../models/Lead');
@@ -22,17 +21,6 @@ router.get('/plans', async (req, res) => {
     await ensureDefaultPlans();
     const plans = await Plan.find({ isActive: true }).sort({ price: 1 });
     res.json({ success: true, plans: plans.map(formatPlanForResponse) });
-  } catch (error) {
-    res.status(500).json({ message: 'Server error', error: error.message });
-  }
-});
-
-// @route   GET /api/public/first-call-deck-mr
-// @desc    Get public Market Research first call deck
-router.get('/first-call-deck-mr', async (req, res) => {
-  try {
-    const deck = await FirstCallDeckMR.findOne({});
-    res.json({ success: true, deck });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
   }
