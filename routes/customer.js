@@ -150,7 +150,29 @@ router.post('/request-service', protect, authorize('customer'), async (req, res)
 // @access  Private (Customer)
 router.get('/chat-sessions', protect, authorize('customer'), async (req, res) => {
   try {
-    const chatSessions = await ChatSession.find({ customer: req.user._id })
+    let chatSessions = await ChatSession.find({ customer: req.user._id })
+      .sort({ createdAt: -1 });
+
+    // If customer has SOW requests but no chat session (e.g. requests created before we added session creation), create one so "Open chat & call" appears
+    if (chatSessions.length === 0) {
+      const hasRequests = await CustomerRequest.exists({ customer: req.user._id });
+      if (hasRequests) {
+        const defaultService = await Service.findOne({ isActive: true }).limit(1);
+        if (defaultService) {
+          const newSession = await ChatSession.create({
+            customer: req.user._id,
+            service: defaultService._id,
+            subService: 'AI Request',
+            status: 'pending',
+            agent: null
+          });
+          notifyAgentsForNewChat(newSession._id, defaultService._id, req.user.name).catch((err) => console.error('Ensure-chat notification error:', err));
+          chatSessions = await ChatSession.find({ customer: req.user._id }).sort({ createdAt: -1 });
+        }
+      }
+    }
+
+    chatSessions = await ChatSession.find({ customer: req.user._id })
       .populate('service', 'name')
       .populate({
         path: 'agent',
@@ -331,6 +353,35 @@ router.post('/ai-request', protect, authorize('customer'), upload.fields([{ name
     });
 
     await notifyAllAgentsOfNewRequest(doc._id, customer.name, doc.sow).catch((err) => console.error('Notify agents error:', err));
+
+    // Create a chat session so the customer gets "Open chat & call" and can message/call the agent
+    let chatSession = null;
+    const defaultService = await Service.findOne({ isActive: true }).limit(1);
+    if (defaultService) {
+      chatSession = await ChatSession.create({
+        customer: customer._id,
+        service: defaultService._id,
+        subService: 'AI Request',
+        status: 'pending',
+        agent: null
+      });
+      notifyAgentsForNewChat(chatSession._id, defaultService._id, customer.name).catch((err) => console.error('Agent chat notification error:', err));
+      const io = req.app.get('io');
+      if (io) {
+        const populatedChat = await ChatSession.findById(chatSession._id)
+          .populate('customer', 'name email')
+          .populate('service', 'name');
+        io.emit('newPendingRequest', {
+          chatSession: {
+            _id: populatedChat._id,
+            customer: populatedChat.customer ? { _id: populatedChat.customer._id, name: populatedChat.customer.name } : {},
+            service: populatedChat.service ? { _id: populatedChat.service._id, name: populatedChat.service.name } : {},
+            subService: populatedChat.subService,
+            status: populatedChat.status
+          }
+        });
+      }
+    }
 
     if (result.balance < 0) {
       const admins = await User.find({ role: 'admin' }).select('email');
