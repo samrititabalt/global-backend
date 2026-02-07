@@ -7,7 +7,7 @@ const { protect } = require('../middleware/auth');
 router.get('/page/:page', async (req, res) => {
   try {
     const page = req.params.page;
-    if (page === 'home' || page === 'common') {
+    if (page === 'home' || page === 'common' || page === 'home-suspense') {
       res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
       res.set('Pragma', 'no-cache');
       res.set('Expires', '0');
