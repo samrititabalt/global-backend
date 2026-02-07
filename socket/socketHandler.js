@@ -3,7 +3,7 @@ const ChatSession = require('../models/ChatSession');
 const Message = require('../models/Message');
 const Call = require('../models/Call');
 const { assignAgent, reassignAgent } = require('../services/agentAssignment');
-const { deductToken, checkTokenBalance } = require('../services/tokenService');
+const { deductToken } = require('../services/tokenService');
 const { sendInitialAIGreeting, respondToCustomerMessage } = require('../services/aiMessages');
 
 const socketHandler = (io) => {
@@ -228,16 +228,7 @@ const socketHandler = (io) => {
           return socket.emit('error', { message: 'Unauthorized' });
         }
 
-        // For customers, check token balance
-        if (sender.role === 'customer') {
-          const balance = await checkTokenBalance(senderId);
-          if (balance <= 0) {
-            return socket.emit('error', { 
-              message: 'Insufficient balance. Please recharge your plan.' 
-            });
-          }
-        }
-
+        // Allow customers to send messages even with zero balance (deductToken allows negative)
         // Verify replyTo message if provided
         if (replyTo) {
           const replyToMessage = await Message.findById(replyTo);

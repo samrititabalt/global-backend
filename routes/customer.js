@@ -8,7 +8,7 @@ const ChatSession = require('../models/ChatSession');
 const Message = require('../models/Message');
 const CustomServiceRequest = require('../models/CustomServiceRequest');
 const CustomerRequest = require('../models/CustomerRequest');
-const { checkTokenBalance, deductTokens } = require('../services/tokenService');
+const { deductTokens } = require('../services/tokenService');
 const { ensureDefaultPlans, formatPlanForResponse } = require('../utils/planDefaults');
 const { notifyAgentsForNewChat, notifyAllAgentsOfNewRequest } = require('../services/agentNotificationService');
 const { sendInitialAIGreeting } = require('../services/aiMessages');
@@ -67,14 +67,7 @@ router.post('/request-service', protect, authorize('customer'), async (req, res)
     const { serviceId, subService } = req.body;
     const customer = req.user;
 
-    // Check token balance
-    const balance = await checkTokenBalance(customer._id);
-    if (balance <= 0) {
-      return res.status(400).json({ 
-        message: 'Insufficient balance. Please recharge your plan.' 
-      });
-    }
-
+    // Allow chat creation even with zero balance (balance can go negative when they send messages)
     // Check if service exists
     const service = await Service.findById(serviceId);
     if (!service) {

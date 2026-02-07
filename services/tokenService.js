@@ -4,11 +4,9 @@ const TokenTransaction = require('../models/TokenTransaction');
 const deductToken = async (customerId, messageId = null) => {
   try {
     const customer = await User.findById(customerId);
-    
-    if (!customer || customer.tokenBalance <= 0) {
-      return { success: false, message: 'Insufficient token balance' };
-    }
+    if (!customer) return { success: false, message: 'Customer not found' };
 
+    // Allow deduction even when balance is 0 or negative so customers can still chat/call
     customer.tokenBalance -= 1;
     await customer.save();
 
