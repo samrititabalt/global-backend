@@ -462,11 +462,56 @@ const extractExpenseFieldsFromImage = async (imageBase64, fields = []) => {
   }
 };
 
+const SOW_COLLECTION_SYSTEM = `You are a helpful assistant collecting details for a Statement of Work (SOW). Ask one short question at a time. Collect: (1) Short description of the request, (2) Expected budget in minutes or hours (required), (3) Expected deadline (date), (4) Deliverable format (Word/PDF/Excel/PowerPoint/Text), (5) Whether it is related to Suspense Tool or another tool (Yes/No), (6) Additional notes. Be concise and friendly. When the user has given at least a description and a valid budget (number), say you have enough to generate the SOW and ask if they want to add files or notes, or say "Ready to generate your SOW." Do not invent data. If the user's message contains multiple answers, extract what you can and ask for the rest. Reply with only the assistant message text, no JSON.`;
+
+/**
+ * Generate next AI message for Request a Service flow (SOW collection).
+ * @param {Array<{role: string, content: string}>} messages - Conversation so far
+ * @returns {{ aiMessage: string, collectedFields: object, readyForSow: boolean }}
+ */
+const generateRequestFlowResponse = async (messages = []) => {
+  const client = getOpenAIClient();
+  const fallback = {
+    aiMessage: 'Please give a short description of your request.',
+    collectedFields: {},
+    readyForSow: false
+  };
+  if (!client) return fallback;
+
+  try {
+    const apiMessages = [
+      { role: 'system', content: SOW_COLLECTION_SYSTEM },
+      ...messages.slice(-14).map((m) => ({ role: m.role === 'bot' ? 'assistant' : m.role, content: m.content || m.text || '' }))
+    ];
+
+    const completion = await client.chat.completions.create({
+      model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+      messages: apiMessages,
+      temperature: 0.5,
+      max_tokens: 300
+    });
+
+    const content = (completion.choices?.[0]?.message?.content || '').trim();
+    if (!content) return fallback;
+
+    const readyForSow = /ready to generate|generate your sow|enough to generate/i.test(content);
+    return {
+      aiMessage: content,
+      collectedFields: {},
+      readyForSow
+    };
+  } catch (error) {
+    console.error('Request flow OpenAI error:', error?.message);
+    return fallback;
+  }
+};
+
 module.exports = {
   generateAIResponse,
   getServicePrompt,
   generateSalaryTemplate,
   generateExpenseTemplate,
-  extractExpenseFieldsFromImage
+  extractExpenseFieldsFromImage,
+  generateRequestFlowResponse
 };
 

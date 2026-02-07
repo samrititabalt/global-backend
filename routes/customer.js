@@ -16,6 +16,7 @@ const { formatMessageForSamAI, mapMessagesForSamAI } = require('../utils/samAi')
 const { SAM_STUDIOS_SERVICES } = require('../constants/samStudiosServices');
 const { upload, uploadToCloudinary } = require('../middleware/cloudinaryUpload');
 const { mail } = require('../utils/sendEmail');
+const { generateRequestFlowResponse } = require('../services/openaiService');
 
 // @route   GET /api/customer/plans
 // @desc    Get all available plans
@@ -253,6 +254,30 @@ router.get('/token-balance', protect, authorize('customer'), async (req, res) =>
     });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   POST /api/customer/ai-request-chat
+// @desc    Get next AI message for Request a Service flow (GPT-4o-mini)
+// @access  Private (Customer)
+router.post('/ai-request-chat', protect, authorize('customer'), async (req, res) => {
+  try {
+    const { messages = [] } = req.body;
+    const normalized = messages.map((m) => ({
+      role: m.role === 'assistant' ? 'bot' : m.role,
+      content: m.content || m.text || '',
+      text: m.text || m.content || ''
+    }));
+    const result = await generateRequestFlowResponse(normalized);
+    res.json({
+      success: true,
+      aiMessage: result.aiMessage,
+      readyForSow: result.readyForSow,
+      collectedFields: result.collectedFields || {}
+    });
+  } catch (error) {
+    console.error('AI request chat error:', error);
+    res.status(500).json({ success: false, message: 'Server error', error: error.message });
   }
 });
 
