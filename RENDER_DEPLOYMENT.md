@@ -1,5 +1,13 @@
 # Render Deployment Instructions
 
+## GitHub not triggering deployments?
+
+If you push to GitHub but Render doesn’t show a new deployment, see **[GITHUB_RENDER_CONNECTION.md](./GITHUB_RENDER_CONNECTION.md)** for step-by-step fixes. Most often the issue is one of:
+
+- **Wrong branch** – Render is set to deploy from `main` but you’re pushing to another branch (or the opposite).
+- **Wrong root directory** – This backend lives in the `global-backend` folder; in Render → Settings → Build & Deploy, set **Root Directory** to `global-backend`.
+- **Wrong repo** – The service is connected to a different GitHub repo than the one you’re pushing to.
+
 ## Quick Redeploy Steps
 
 1. **Go to your Render Dashboard**: https://dashboard.render.com
