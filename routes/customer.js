@@ -7,12 +7,15 @@ const Service = require('../models/Service');
 const ChatSession = require('../models/ChatSession');
 const Message = require('../models/Message');
 const CustomServiceRequest = require('../models/CustomServiceRequest');
-const { checkTokenBalance } = require('../services/tokenService');
+const CustomerRequest = require('../models/CustomerRequest');
+const { checkTokenBalance, deductTokens } = require('../services/tokenService');
 const { ensureDefaultPlans, formatPlanForResponse } = require('../utils/planDefaults');
-const { notifyAgentsForNewChat } = require('../services/agentNotificationService');
+const { notifyAgentsForNewChat, notifyAllAgentsOfNewRequest } = require('../services/agentNotificationService');
 const { sendInitialAIGreeting } = require('../services/aiMessages');
 const { formatMessageForSamAI, mapMessagesForSamAI } = require('../utils/samAi');
 const { SAM_STUDIOS_SERVICES } = require('../constants/samStudiosServices');
+const { upload, uploadToCloudinary } = require('../middleware/cloudinaryUpload');
+const { mail } = require('../utils/sendEmail');
 
 // @route   GET /api/customer/plans
 // @desc    Get all available plans
@@ -248,6 +251,105 @@ router.get('/token-balance', protect, authorize('customer'), async (req, res) =>
       success: true, 
       balance: customer.tokenBalance 
     });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   POST /api/customer/ai-request
+// @desc    Submit AI-driven request (SOW), deduct minutes, notify agents
+// @access  Private (Customer)
+router.post('/ai-request', protect, authorize('customer'), upload.fields([{ name: 'files', maxCount: 10 }]), uploadToCloudinary, async (req, res) => {
+  try {
+    let data = {};
+    try {
+      data = typeof req.body.data === 'string' ? JSON.parse(req.body.data) : (req.body.data || {});
+    } catch (e) {
+      return res.status(400).json({ success: false, message: 'Invalid request data' });
+    }
+
+    const customer = req.user;
+    const sow = data.sow || {};
+    const budgetMinutes = Math.round(Number(sow.budgetMinutes || data.expectedBudget) || 0);
+
+    if (budgetMinutes <= 0) {
+      return res.status(400).json({ success: false, message: 'Expected budget (minutes) is required and must be a positive number.' });
+    }
+
+    const result = await deductTokens(customer._id, budgetMinutes, 'Request budget');
+    if (!result.success) {
+      return res.status(400).json({ success: false, message: result.message || 'Failed to deduct minutes' });
+    }
+
+    const fileUrls = (req.uploadedFiles || [])
+      .filter((f) => f.type === 'request-file')
+      .map((f) => f.url);
+
+    const title = (sow.title || data.shortDescription || 'Service Request').slice(0, 200);
+    const doc = await CustomerRequest.create({
+      customer: customer._id,
+      title,
+      shortDescription: data.shortDescription || '',
+      expectedBudget: budgetMinutes,
+      expectedDeadline: data.expectedDeadline || '',
+      deliverableFormat: data.deliverableFormat || '',
+      relatedToSuspenseTool: data.relatedToSuspenseTool || 'No',
+      additionalNotes: data.additionalNotes || '',
+      sow: {
+        title: sow.title,
+        summary: sow.summary,
+        scopeOfWork: sow.scopeOfWork,
+        deliverables: sow.deliverables,
+        timeline: sow.timeline,
+        budgetMinutes: sow.budgetMinutes,
+        minutesDeducted: sow.minutesDeducted,
+        requiredInputs: sow.requiredInputs,
+        outputFormat: sow.outputFormat,
+        notes: sow.notes
+      },
+      minutesDeducted: budgetMinutes,
+      status: 'Open',
+      fileUrls
+    });
+
+    await notifyAllAgentsOfNewRequest(doc._id, customer.name, doc.sow).catch((err) => console.error('Notify agents error:', err));
+
+    if (result.balance < 0) {
+      const admins = await User.find({ role: 'admin' }).select('email');
+      const html = `
+        <p><strong>Customer negative balance alert</strong></p>
+        <p>Customer: ${customer.name} (${customer.email})</p>
+        <p>Balance after deduction: ${result.balance} minutes.</p>
+        <p>Request: ${title}</p>
+        <p>Budget deducted: ${budgetMinutes} minutes.</p>
+      `;
+      for (const admin of admins) {
+        if (admin.email) {
+          mail(admin.email, 'Customer has negative minutes balance', html).catch((e) => console.error('Admin alert email failed:', e));
+        }
+      }
+    }
+
+    res.json({
+      success: true,
+      request: { _id: doc._id, title: doc.title, status: doc.status },
+      balance: result.balance
+    });
+  } catch (error) {
+    console.error('AI request error:', error);
+    res.status(500).json({ success: false, message: 'Server error', error: error.message });
+  }
+});
+
+// @route   GET /api/customer/request-history
+// @desc    Get customer request history (AI-driven requests)
+// @access  Private (Customer)
+router.get('/request-history', protect, authorize('customer'), async (req, res) => {
+  try {
+    const list = await CustomerRequest.find({ customer: req.user._id })
+      .sort({ createdAt: -1 })
+      .lean();
+    res.json({ success: true, requests: list });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
   }

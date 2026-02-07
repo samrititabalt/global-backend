@@ -30,6 +30,10 @@ const fileFilter = (req, file, cb) => {
   else if (file.fieldname === 'file') {
     cb(null, true);
   }
+  // Customer request attachments (Word, PDF, Excel, images)
+  else if (file.fieldname === 'files') {
+    cb(null, true);
+  }
   // Accept audio
   else if (file.fieldname === 'audio') {
     if (file.mimetype.startsWith('audio/') || file.mimetype === 'audio/webm') {
@@ -239,6 +243,27 @@ const uploadToCloudinary = async (req, res, next) => {
           .catch(error => {
             console.error(`Error uploading document ${file.originalname}:`, error);
             throw new Error(`Failed to upload document: ${error.message}`);
+          });
+        uploadPromises.push(uploadPromise);
+      }
+    }
+
+    // Customer request files (Word, PDF, Excel, images)
+    if (req.files.files && req.files.files.length > 0) {
+      const customerRequestFolder = `customer-requests/${uploadOwnerId}`;
+      for (const file of req.files.files) {
+        const isImage = file.mimetype && file.mimetype.startsWith('image/');
+        const uploadFn = isImage ? uploadImage : uploadFile;
+        const uploadPromise = uploadFn(file.buffer, customerRequestFolder, file.mimetype)
+          .then(result => ({
+            type: 'request-file',
+            url: result.secure_url || result.url,
+            publicId: result.public_id || result.publicId,
+            fileName: file.originalname,
+          }))
+          .catch(error => {
+            console.error(`Error uploading request file ${file.originalname}:`, error);
+            throw new Error(`Failed to upload file: ${error.message}`);
           });
         uploadPromises.push(uploadPromise);
       }

@@ -56,6 +56,34 @@ const addTokens = async (customerId, amount, reason, performedBy = null, transac
   }
 };
 
+/**
+ * Deduct a specified number of minutes from customer (used for request budget).
+ * Allows negative balance; caller should notify admin when balance goes negative.
+ */
+const deductTokens = async (customerId, amount, reason = 'Request budget') => {
+  try {
+    const customer = await User.findById(customerId);
+    if (!customer) return { success: false, message: 'Customer not found' };
+    const mins = Math.round(Number(amount) || 0);
+    if (mins <= 0) return { success: false, message: 'Amount must be positive' };
+
+    customer.tokenBalance -= mins;
+    await customer.save();
+
+    await TokenTransaction.create({
+      customer: customerId,
+      amount: -mins,
+      type: 'deduct',
+      reason: reason || 'Request budget'
+    });
+
+    return { success: true, balance: customer.tokenBalance };
+  } catch (error) {
+    console.error('Error deducting tokens:', error);
+    return { success: false, message: 'Error processing token deduction' };
+  }
+};
+
 const checkTokenBalance = async (customerId) => {
   try {
     const customer = await User.findById(customerId);
@@ -66,5 +94,5 @@ const checkTokenBalance = async (customerId) => {
   }
 };
 
-module.exports = { deductToken, addTokens, checkTokenBalance };
+module.exports = { deductToken, addTokens, deductTokens, checkTokenBalance };
 

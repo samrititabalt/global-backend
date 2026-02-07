@@ -202,8 +202,73 @@ const notifyAgentsForNewChat = async (chatSessionId, serviceId, customerName) =>
   }
 };
 
+/**
+ * Notify all agents of a new AI-driven customer request (SOW)
+ */
+const notifyAllAgentsOfNewRequest = async (requestId, customerName, sow) => {
+  try {
+    const agents = await User.find({ role: 'agent', isActive: true }).select('name email');
+    if (agents.length === 0) {
+      console.log('No agents to notify for new request');
+      return;
+    }
+
+    const frontendUrl = process.env.FRONTEND_URL || 'https://mainproduct.vercel.app';
+    const dashboardLink = `${frontendUrl}/agent`;
+
+    const title = (sow && sow.title) || 'Service Request';
+    const summary = (sow && sow.summary) || '';
+    const timeline = (sow && sow.timeline) || 'TBD';
+    const budgetMinutes = (sow && sow.budgetMinutes) != null ? sow.budgetMinutes : '';
+
+    const emailPromises = agents.map(async (agent) => {
+      if (!agent.email) return;
+      const subject = `New Request – ${title}`;
+      const html = `
+        <!DOCTYPE html>
+        <html lang="en">
+        <head><meta charset="UTF-8"><style>
+          body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; color: #333; }
+          .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+          .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: #fff; padding: 20px; border-radius: 8px 8px 0 0; }
+          .content { padding: 20px; border: 1px solid #e0e0e0; border-top: none; }
+          .row { margin: 12px 0; }
+          .label { font-weight: 600; color: #666; font-size: 12px; text-transform: uppercase; }
+          .value { margin-top: 4px; }
+          .button { display: inline-block; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: #fff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: 600; margin-top: 16px; }
+        </style></head>
+        <body>
+          <div class="container">
+            <div class="header"><h2 style="margin:0;">New Customer Request (SOW)</h2></div>
+            <div class="content">
+              <p><strong>Customer:</strong> ${customerName || 'Customer'}</p>
+              <div class="row"><span class="label">Title</span><div class="value">${title}</div></div>
+              <div class="row"><span class="label">Summary</span><div class="value">${summary || '—'}</div></div>
+              <div class="row"><span class="label">Timeline</span><div class="value">${timeline}</div></div>
+              <div class="row"><span class="label">Budget (minutes)</span><div class="value">${budgetMinutes}</div></div>
+              <a href="${dashboardLink}" class="button">Open Agent Dashboard</a>
+            </div>
+          </div>
+        </body>
+        </html>
+      `;
+      try {
+        await mail(agent.email, subject, html);
+      } catch (err) {
+        console.error(`Error emailing agent ${agent.email}:`, err);
+      }
+    });
+
+    await Promise.all(emailPromises);
+    console.log(`SOW notification sent to ${agents.length} agent(s) for request ${requestId}`);
+  } catch (error) {
+    console.error('Error notifying agents of new request:', error);
+  }
+};
+
 module.exports = {
   notifyAgentsForNewChat,
+  notifyAllAgentsOfNewRequest,
   findAgentsForService,
   sendEmailNotification
 };
