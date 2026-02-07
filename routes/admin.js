@@ -35,6 +35,7 @@ const path = require('path');
 const fs = require('fs');
 const MarketResearchAccessCode = require('../models/MarketResearchAccessCode');
 const FirstCallDeckMR = require('../models/FirstCallDeckMR');
+const SiteSetting = require('../models/SiteSetting');
 const { generateAIResponse } = require('../services/openaiService');
 const { DEFAULT_PLANS } = require('../constants/defaultPlans');
 const { DEFAULT_MARKET_RESEARCH_DECK } = require('../data/defaultMarketResearchDeck');
@@ -1831,6 +1832,20 @@ router.get('/homepage-video', protect, authorize('admin'), async (req, res) => {
     res.json({ success: true, videoInfo });
   } catch (error) {
     console.error('Error getting video info:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   PUT /api/admin/active-homepage
+// @desc    Set which homepage all visitors see (original | suspense)
+// @access  Private (Admin)
+router.put('/active-homepage', protect, authorize('admin'), async (req, res) => {
+  try {
+    const { activeHomepage } = req.body;
+    const value = activeHomepage === 'suspense' ? 'suspense' : 'original';
+    await SiteSetting.set('activeHomepage', value);
+    res.json({ success: true, activeHomepage: value });
+  } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 });

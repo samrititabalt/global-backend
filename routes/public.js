@@ -10,6 +10,7 @@ const Lead = require('../models/Lead');
 const Activity = require('../models/Activity');
 const VideoStatus = require('../models/VideoStatus');
 const SharedChart = require('../models/SharedChart');
+const SiteSetting = require('../models/SiteSetting');
 const { protect } = require('../middleware/auth');
 const MarketResearchAccessCode = require('../models/MarketResearchAccessCode');
 
@@ -386,6 +387,20 @@ router.post('/ensure-owner-customer', async (req, res) => {
       message: 'Server error',
       error: error.message 
     });
+  }
+});
+
+// @route   GET /api/public/active-homepage
+// @desc    Get which homepage is active for all visitors (original | suspense)
+// @access  Public
+router.get('/active-homepage', async (req, res) => {
+  try {
+    const value = await SiteSetting.get('activeHomepage', 'original');
+    const activeHomepage = value === 'suspense' ? 'suspense' : 'original';
+    res.json({ activeHomepage });
+  } catch (error) {
+    console.error('[Public API] Error getting active homepage:', error);
+    res.json({ activeHomepage: 'original' });
   }
 });
 
