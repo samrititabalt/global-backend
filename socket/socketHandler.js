@@ -303,6 +303,16 @@ const socketHandler = (io) => {
         // Emit to all in chat room
         io.to(`chat_${chatSessionId}`).emit('newMessage', messageData);
 
+        // When agent responds, notify customer in their user room (for dashboard notifications)
+        if (sender.role === 'agent' && chatSession.customer) {
+          const customerId = chatSession.customer.toString();
+          io.to(`user_${customerId}`).emit('agentResponded', {
+            chatSessionId,
+            messagePreview: (content || '').slice(0, 80),
+            senderName: sender.name || 'Agent',
+          });
+        }
+
         // If customer sent a message and no agent has joined/online, generate AI response
         if (sender.role === 'customer') {
           // Update token balance for customer
