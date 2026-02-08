@@ -571,6 +571,23 @@ router.get('/shared-chart/:shareId', async (req, res) => {
   }
 });
 
+// @route   GET /api/public/site-media/:key
+// @desc    Get stored site image URL by key (e.g. homepage_logo). Used to display admin-uploaded images anywhere on the site.
+// @access  Public
+router.get('/site-media/:key', async (req, res) => {
+  try {
+    const { key } = req.params;
+    const url = await SiteSetting.get(key, '');
+    if (!url) {
+      return res.status(404).json({ success: false, url: null });
+    }
+    res.json({ success: true, url });
+  } catch (error) {
+    console.error('[Public API] site-media error:', error);
+    res.status(500).json({ success: false, url: null });
+  }
+});
+
 // @route   POST /api/public/market-research/validate
 // @desc    Validate Market Research Platform access
 // @access  Public

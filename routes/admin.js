@@ -30,7 +30,7 @@ const {
 } = require('../services/accessCodeService');
 const { upload, uploadToCloudinary } = require('../middleware/cloudinaryUpload');
 const { videoUpload } = require('../middleware/upload');
-const { uploadVideo, deleteFromCloudinary } = require('../services/cloudinary');
+const { uploadVideo, uploadImage, deleteFromCloudinary } = require('../services/cloudinary');
 const path = require('path');
 const fs = require('fs');
 const MarketResearchAccessCode = require('../models/MarketResearchAccessCode');
@@ -1847,6 +1847,47 @@ router.put('/active-homepage', protect, authorize('admin'), async (req, res) => 
     res.json({ success: true, activeHomepage: value });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// ========== SITE MEDIA (Cloudinary images for use anywhere on site) ==========
+
+const MEDIA_KEYS = ['homepage_logo', 'hero_image', 'footer_logo', 'favicon'];
+
+// @route   POST /api/admin/media/upload
+// @desc    Upload image to Cloudinary and save URL under a key (e.g. homepage_logo). Use key to display image anywhere on the site.
+// @access  Private (Admin)
+router.post('/media/upload', protect, authorize('admin'), upload.single('image'), async (req, res) => {
+  try {
+    if (!req.file || !req.file.buffer) {
+      return res.status(400).json({ message: 'No image file provided. Use field name "image".' });
+    }
+    const key = (req.body.key || 'homepage_logo').trim().replace(/\s+/g, '_') || 'homepage_logo';
+    const result = await uploadImage(req.file.buffer, 'site-media', req.file.mimetype);
+    await SiteSetting.set(key, result.url);
+    res.json({ success: true, url: result.url, key, publicId: result.publicId });
+  } catch (error) {
+    console.error('Site media upload error:', error);
+    if (error.message && error.message.includes('Cloudinary')) {
+      return res.status(500).json({ message: error.message, error: 'CLOUDINARY_ERROR' });
+    }
+    res.status(500).json({ message: error.message || 'Failed to upload image.' });
+  }
+});
+
+// @route   GET /api/admin/media/settings
+// @desc    Get current site media URLs by key (for admin display)
+// @access  Private (Admin)
+router.get('/media/settings', protect, authorize('admin'), async (req, res) => {
+  try {
+    const settings = {};
+    for (const k of MEDIA_KEYS) {
+      settings[k] = await SiteSetting.get(k, '');
+    }
+    res.json({ success: true, settings });
+  } catch (error) {
+    console.error('Error fetching media settings:', error);
+    res.status(500).json({ message: 'Server error' });
   }
 });
 
