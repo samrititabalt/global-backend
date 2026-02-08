@@ -35,10 +35,12 @@ const path = require('path');
 const fs = require('fs');
 const MarketResearchAccessCode = require('../models/MarketResearchAccessCode');
 const FirstCallDeckMR = require('../models/FirstCallDeckMR');
+const FirstCallDeckAgencies = require('../models/FirstCallDeckAgencies');
 const SiteSetting = require('../models/SiteSetting');
 const { generateAIResponse } = require('../services/openaiService');
 const { DEFAULT_PLANS } = require('../constants/defaultPlans');
 const { DEFAULT_MARKET_RESEARCH_DECK } = require('../data/defaultMarketResearchDeck');
+const { DEFAULT_AGENCIES_DECK } = require('../data/defaultAgenciesDeck');
 
 // Helper to parse JSON with fallback (used for AI deck edits)
 const parseJsonWithFallback = (text) => {
@@ -474,6 +476,208 @@ router.post('/first-call-deck-mr/reset', protect, authorize('admin'), async (req
 // @access  Private (Admin)
 router.post(
   '/first-call-deck-mr/upload-image',
+  protect,
+  authorize('admin'),
+  upload.fields([{ name: 'image', maxCount: 1 }]),
+  uploadToCloudinary,
+  async (req, res) => {
+    try {
+      const uploaded = req.uploadedFiles?.find((file) => file.type === 'image');
+      if (!uploaded?.url) {
+        return res.status(400).json({ message: 'No image uploaded' });
+      }
+      res.json({ success: true, url: uploaded.url, publicId: uploaded.publicId || null });
+    } catch (error) {
+      res.status(500).json({ message: 'Server error', error: error.message });
+    }
+  }
+);
+
+// ========== FIRST CALL DECK (AGENCIES) ==========
+
+// @route   GET /api/admin/first-call-deck-agencies
+// @desc    Get Agencies first call deck
+// @access  Private (Admin)
+router.get('/first-call-deck-agencies', protect, authorize('admin'), async (req, res) => {
+  try {
+    const deck = await FirstCallDeckAgencies.findOne({});
+    res.json({ success: true, deck });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   PUT /api/admin/first-call-deck-agencies
+// @desc    Save Agencies first call deck
+// @access  Private (Admin)
+router.put('/first-call-deck-agencies', protect, authorize('admin'), async (req, res) => {
+  try {
+    const slides = Array.isArray(req.body?.slides) ? req.body.slides : [];
+    const deck = await FirstCallDeckAgencies.findOneAndUpdate(
+      {},
+      {
+        slides,
+        updatedBy: {
+          id: req.user?._id,
+          name: req.user?.name || 'Admin',
+          role: 'admin'
+        },
+        updatedAt: new Date()
+      },
+      { new: true, upsert: true }
+    );
+    res.json({ success: true, deck });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   POST /api/admin/first-call-deck-agencies/ai-edit
+// @desc    AI edit Agencies first call deck
+// @access  Private (Admin)
+router.post('/first-call-deck-agencies/ai-edit', protect, authorize('admin'), async (req, res) => {
+  try {
+    const instruction = typeof req.body?.instruction === 'string' ? req.body.instruction : '';
+    const slides = Array.isArray(req.body?.slides) ? req.body.slides : [];
+    if (!instruction.trim()) {
+      return res.status(400).json({ message: 'Instruction is required' });
+    }
+    if (!slides.length) {
+      return res.status(400).json({ message: 'Slides data is required' });
+    }
+    const hasValidSlides = slides.every((slide) => slide && typeof slide === 'object');
+    if (!hasValidSlides) {
+      return res.status(400).json({ message: 'Slides must be an array of objects' });
+    }
+    if (!process.env.OPENAI_API_KEY || !process.env.OPENAI_API_KEY.trim()) {
+      return res.status(503).json({
+        message: 'AI is not configured. Please set OPENAI_API_KEY and try again.'
+      });
+    }
+
+    const prompt = `
+You are editing the "First-Call Deck To Agencies" — aimed at market research agencies. Keep the same slide structure and layout types.
+Return JSON only with this shape:
+{
+  "summary": "Short summary of edits",
+  "slides": [ ...updatedSlides ]
+}
+
+Rules:
+- Preserve slide layout by keeping each slide "type".
+- You may edit text, images, and lists.
+- You may add or remove slides, but each slide must include a valid "type".
+- Allowed types: agenda, companyProfile, portfolioGrid, askSamOverview, howWorks, caseStudies, serviceOptions, whyChoose.
+- Keep content focused on agencies: we understand they have other partners; we want a small opportunity to test us and build trust; we can come to their office.
+- Tone: professional, consultative, no pressure. Big 4–style clarity.
+- If a slide has an "icon" field (emoji), keep or set an appropriate icon for the header.
+- If you only update one slide, still return that slide with its id.
+
+Current slides JSON:
+${JSON.stringify(slides)}
+
+Instruction:
+${instruction}
+`;
+
+    const aiResponse = await generateAIResponse(prompt, [], 'general');
+    if (!aiResponse || typeof aiResponse !== 'string') {
+      return res.status(502).json({ message: 'AI response was empty. Please try again.' });
+    }
+    const parsed = parseJsonWithFallback(aiResponse);
+    const parsedSlides = Array.isArray(parsed?.slides)
+      ? parsed.slides
+      : Array.isArray(parsed) ? parsed : null;
+    if (!parsedSlides || !Array.isArray(parsedSlides)) {
+      return res.status(502).json({
+        message: 'AI response invalid. Please try again or simplify the instruction.'
+      });
+    }
+
+    const sanitizedUpdates = parsedSlides.map((slide) => {
+      if (!slide || typeof slide !== 'object') return null;
+      return Object.entries(slide).reduce((acc, [key, value]) => {
+        if (value !== undefined) acc[key] = value;
+        return acc;
+      }, {});
+    });
+    const filteredUpdates = sanitizedUpdates.filter(Boolean);
+    if (!filteredUpdates.length) {
+      return res.status(502).json({ message: 'AI response invalid. No slide updates found.' });
+    }
+
+    const updatedById = new Map(filteredUpdates.map((slide) => [slide.id, slide]));
+    const mergedSlides = slides.map((slide) => {
+      const update = updatedById.get(slide.id);
+      if (!update) return slide;
+      return {
+        ...slide,
+        ...update,
+        id: slide.id,
+        type: update.type || slide.type
+      };
+    });
+
+    const existingIds = new Set(slides.map((slide) => slide.id));
+    const appendedSlides = filteredUpdates
+      .filter((slide) => !existingIds.has(slide.id))
+      .map((slide, index) => ({
+        ...slide,
+        id: slide.id || slides.length + index + 1,
+        type: slide.type || 'agenda'
+      }));
+
+    const finalSlides = [...mergedSlides, ...appendedSlides];
+
+    const deck = await FirstCallDeckAgencies.findOneAndUpdate(
+      {},
+      {
+        slides: finalSlides,
+        updatedBy: {
+          id: req.user?._id,
+          name: req.user?.name || 'Admin',
+          role: 'admin'
+        },
+        updatedAt: new Date()
+      },
+      { new: true, upsert: true }
+    );
+
+    res.json({ success: true, deck, summary: parsed?.summary || 'Deck updated.' });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   POST /api/admin/first-call-deck-agencies/reset
+// @desc    Reset Agencies deck to defaults
+// @access  Private (Admin)
+router.post('/first-call-deck-agencies/reset', protect, authorize('admin'), async (req, res) => {
+  try {
+    const deck = await FirstCallDeckAgencies.findOneAndUpdate(
+      {},
+      {
+        slides: DEFAULT_AGENCIES_DECK,
+        updatedBy: {
+          id: req.user?._id,
+          name: req.user?.name || 'Admin',
+          role: 'admin'
+        },
+        updatedAt: new Date()
+      },
+      { new: true, upsert: true }
+    );
+    res.json({ success: true, deck });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   POST /api/admin/first-call-deck-agencies/upload-image
+// @desc    Upload image for Agencies first call deck
+// @access  Private (Admin)
+router.post(
+  '/first-call-deck-agencies/upload-image',
   protect,
   authorize('admin'),
   upload.fields([{ name: 'image', maxCount: 1 }]),

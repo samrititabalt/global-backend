@@ -13,6 +13,10 @@ const SharedChart = require('../models/SharedChart');
 const SiteSetting = require('../models/SiteSetting');
 const { protect } = require('../middleware/auth');
 const MarketResearchAccessCode = require('../models/MarketResearchAccessCode');
+const FirstCallDeckMR = require('../models/FirstCallDeckMR');
+const FirstCallDeckAgencies = require('../models/FirstCallDeckAgencies');
+const { DEFAULT_MARKET_RESEARCH_DECK } = require('../data/defaultMarketResearchDeck');
+const { DEFAULT_AGENCIES_DECK } = require('../data/defaultAgenciesDeck');
 
 // @route   GET /api/public/plans
 // @desc    Get all available plans (public)
@@ -585,6 +589,32 @@ router.get('/site-media/:key', async (req, res) => {
   } catch (error) {
     console.error('[Public API] site-media error:', error);
     res.status(500).json({ success: false, url: null });
+  }
+});
+
+// @route   GET /api/public/first-call-deck-mr
+// @desc    Get Market Research first-call deck (public)
+// @access  Public
+router.get('/first-call-deck-mr', async (req, res) => {
+  try {
+    const doc = await FirstCallDeckMR.findOne({});
+    const slides = doc?.slides?.length ? doc.slides : DEFAULT_MARKET_RESEARCH_DECK;
+    res.json({ success: true, deck: { slides } });
+  } catch (error) {
+    res.status(500).json({ success: false, deck: { slides: DEFAULT_MARKET_RESEARCH_DECK } });
+  }
+});
+
+// @route   GET /api/public/first-call-deck-agencies
+// @desc    Get First-Call Deck To Agencies (public)
+// @access  Public
+router.get('/first-call-deck-agencies', async (req, res) => {
+  try {
+    const doc = await FirstCallDeckAgencies.findOne({});
+    const slides = doc?.slides?.length ? doc.slides : DEFAULT_AGENCIES_DECK;
+    res.json({ success: true, deck: { slides } });
+  } catch (error) {
+    res.status(500).json({ success: false, deck: { slides: DEFAULT_AGENCIES_DECK } });
   }
 });
 
