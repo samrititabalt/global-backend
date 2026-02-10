@@ -98,17 +98,26 @@ router.post(
       if (!errors.isEmpty()) {
         return res.status(400).json({ message: errors.array().map((e) => e.msg).join('. ') });
       }
-      const { stockName, symbol, quantity, avgBuyPrice } = req.body;
+      const { stockName, symbol, quantity, avgBuyPrice, currentPrice: userPrice, priceAsOfDate: userPriceDate } = req.body;
       const sym = symbol || stockName;
-      const priceResult = await askSandyService.getStockPrice(sym);
+      let currentPrice = null;
+      let priceAsOfDate = null;
+      if (userPrice != null && userPrice !== '' && Number.isFinite(Number(userPrice))) {
+        currentPrice = Number(userPrice);
+        priceAsOfDate = userPriceDate ? new Date(userPriceDate) : new Date();
+      } else {
+        const priceResult = await askSandyService.getStockPrice(sym);
+        currentPrice = priceResult.price;
+        priceAsOfDate = priceResult.date ? new Date(priceResult.date) : new Date();
+      }
       const item = await AskSandyPortfolio.create({
         userId: req.askSandyUser._id,
         stockName: stockName.trim(),
         symbol: (sym || '').trim(),
         quantity: Number(quantity),
         avgBuyPrice: Number(avgBuyPrice),
-        currentPrice: priceResult.price,
-        priceAsOfDate: priceResult.date ? new Date(priceResult.date) : new Date()
+        currentPrice,
+        priceAsOfDate
       });
       res.status(201).json({ success: true, item });
     } catch (err) {
@@ -125,11 +134,15 @@ router.patch('/portfolio/:id', protectAskSandy, async (req, res) => {
       userId: req.askSandyUser._id
     });
     if (!item) return res.status(404).json({ message: 'Holding not found.' });
-    const { stockName, symbol, quantity, avgBuyPrice } = req.body;
+    const { stockName, symbol, quantity, avgBuyPrice, currentPrice, priceAsOfDate } = req.body;
     if (stockName !== undefined) item.stockName = stockName.trim();
     if (symbol !== undefined) item.symbol = symbol.trim();
     if (quantity !== undefined) item.quantity = Number(quantity);
     if (avgBuyPrice !== undefined) item.avgBuyPrice = Number(avgBuyPrice);
+    if (currentPrice !== undefined && currentPrice !== '' && Number.isFinite(Number(currentPrice))) {
+      item.currentPrice = Number(currentPrice);
+      item.priceAsOfDate = priceAsOfDate ? new Date(priceAsOfDate) : new Date();
+    }
     await item.save();
     res.json({ success: true, item });
   } catch (err) {

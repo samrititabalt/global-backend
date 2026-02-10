@@ -14,6 +14,9 @@ const getClient = () => {
 
 const model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 
+/** Use system date so GPT always bases prices and analysis on today, not training cut-off */
+const getCurrentDate = () => new Date().toISOString().slice(0, 10);
+
 const parseJson = (text) => {
   if (!text) return null;
   try {
@@ -56,8 +59,9 @@ exports.suggestStock = async (query) => {
 /** Get current market price (GPT returns approximate; in production use Yahoo Finance etc.) */
 exports.getStockPrice = async (symbolOrName) => {
   const c = getClient();
+  const today = getCurrentDate();
   if (!c) {
-    return { price: 0, date: new Date().toISOString().slice(0, 10), source: 'unavailable' };
+    return { price: 0, date: today, source: 'unavailable' };
   }
   try {
     const completion = await c.chat.completions.create({
@@ -65,27 +69,28 @@ exports.getStockPrice = async (symbolOrName) => {
       messages: [
         {
           role: 'system',
-          content: 'You provide approximate current stock prices when possible. Reply with JSON only: { "price": number, "date": "YYYY-MM-DD", "currency": "INR or USD" }. If you cannot determine price, use a reasonable placeholder for that stock and say so in a "note" field. Be concise.'
+          content: `IMPORTANT: Today's date is ${today}. You MUST use this date as the reference for "current" or "latest" price. Provide the most recent available market price for the stock as of or closest to ${today}. Do NOT use old dates (e.g. 2023). Your JSON "date" field MUST be "${today}" unless you have a specific different session date. Reply with JSON only: { "price": number, "date": "${today}", "currency": "INR or USD" }. If you cannot determine a current price, use a placeholder and set "note" to explain.`
         },
-        { role: 'user', content: `Current market price for: ${symbolOrName}. JSON only.` }
+        { role: 'user', content: `Today is ${today}. Current market price for: ${symbolOrName}. JSON only.` }
       ],
       temperature: 0.1,
       max_tokens: 150
     });
     const text = completion.choices?.[0]?.message?.content?.trim();
     const out = parseJson(text);
-    const date = out?.date || new Date().toISOString().slice(0, 10);
+    const date = out?.date || today;
     const price = typeof out?.price === 'number' ? out.price : (parseFloat(out?.price) || 0);
     return { price, date, currency: out?.currency || 'INR', note: out?.note };
   } catch (err) {
     console.error('Ask Sandy getStockPrice:', err?.message);
-    return { price: 0, date: new Date().toISOString().slice(0, 10), source: 'error' };
+    return { price: 0, date: today, source: 'error' };
   }
 };
 
 /** Trade challenge: if user chose Sell, GPT may suggest Buy with reasons */
 exports.tradeChallenge = async (stockName, userAction, timeframe) => {
   const c = getClient();
+  const today = getCurrentDate();
   if (!c) {
     return { suggestAction: userAction, reason: 'AI not configured.', shouldSwitch: false };
   }
@@ -95,12 +100,13 @@ exports.tradeChallenge = async (stockName, userAction, timeframe) => {
       messages: [
         {
           role: 'system',
-          content: `You are a polite trading advisor. The user has chosen to ${userAction} for ${stockName} (timeframe: ${timeframe}). 
-If they chose SELL but you believe the stock is likely to grow (fundamentals, sentiment, news), politely suggest they consider BUY instead and give 2-3 short reasons. Do NOT suggest Intraday vs Week vs Month - only Buy vs Sell.
+          content: `IMPORTANT: Today's date is ${today}. Base all reasoning on market conditions, news, and sentiment as of this date. Do NOT use outdated dates (e.g. 2023).
+You are a polite trading advisor. The user has chosen to ${userAction} for ${stockName} (timeframe: ${timeframe}). 
+If they chose SELL but you believe the stock is likely to grow (fundamentals, sentiment, news as of ${today}), politely suggest they consider BUY instead and give 2-3 short reasons. Do NOT suggest Intraday vs Week vs Month - only Buy vs Sell.
 If they chose BUY and you think it's reasonable, say "Your choice seems reasonable" and suggestAction: "buy".
 Reply with JSON only: { "suggestAction": "buy" or "sell", "reason": "string", "shouldSwitch": boolean }.`
         },
-        { role: 'user', content: `Stock: ${stockName}. User chose: ${userAction}. Timeframe: ${timeframe}.` }
+        { role: 'user', content: `Today is ${today}. Stock: ${stockName}. User chose: ${userAction}. Timeframe: ${timeframe}.` }
       ],
       temperature: 0.5,
       max_tokens: 400
@@ -117,6 +123,7 @@ Reply with JSON only: { "suggestAction": "buy" or "sell", "reason": "string", "s
 /** Two methodologies for target profit */
 exports.twoMethodologies = async (stockName, action, timeframe, targetProfitAmount) => {
   const c = getClient();
+  const today = getCurrentDate();
   if (!c) {
     return {
       multipleSmall: { title: 'Multiple Small Trades', steps: ['AI not configured.'] },
@@ -129,14 +136,15 @@ exports.twoMethodologies = async (stockName, action, timeframe, targetProfitAmou
       messages: [
         {
           role: 'system',
-          content: `You are a trading strategy advisor. For the given stock, action (buy/sell), timeframe, and target profit in money, propose two methodologies:
+          content: `Today's date is ${today}. Base your strategy on current market context.
+You are a trading strategy advisor. For the given stock, action (buy/sell), timeframe, and target profit in money, propose two methodologies:
 1) Multiple Small Trades: several smaller trades over the period to reach the target.
 2) Few Big Trades: one or two larger trades to reach the target.
 Reply with JSON only: { "multipleSmall": { "title": "Multiple Small Trades", "steps": ["step1","step2",...] }, "fewBig": { "title": "Few Big Trades", "steps": ["step1","step2",...] } }.`
         },
         {
           role: 'user',
-          content: `Stock: ${stockName}. Action: ${action}. Timeframe: ${timeframe}. Target profit: ${targetProfitAmount} (money).`
+          content: `Today is ${today}. Stock: ${stockName}. Action: ${action}. Timeframe: ${timeframe}. Target profit: ${targetProfitAmount} (money).`
         }
       ],
       temperature: 0.4,
@@ -192,6 +200,7 @@ exports.getNifty50List = async () => {
 /** Get method explanation when user has chosen multiple_small or few_big */
 exports.methodExplanation = async (stockName, action, timeframe, targetProfit, method) => {
   const c = getClient();
+  const today = getCurrentDate();
   if (!c) return { steps: [], explanation: 'AI not configured.' };
   try {
     const methodLabel = method === 'multiple_small' ? 'Multiple Small Trades' : 'Few Big Trades';
@@ -200,9 +209,10 @@ exports.methodExplanation = async (stockName, action, timeframe, targetProfit, m
       messages: [
         {
           role: 'system',
-          content: `You are a trading advisor. Explain the entire process in clear, numbered steps for the chosen strategy. User wants to ${action} ${stockName} over ${timeframe} with target profit ${targetProfit}. Strategy: ${methodLabel}. Be concise and actionable. Reply with JSON: { "steps": ["step1","step2",...], "explanation": "short summary" }`
+          content: `Today's date is ${today}. Base your explanation on current market context.
+You are a trading advisor. Explain the entire process in clear, numbered steps for the chosen strategy. User wants to ${action} ${stockName} over ${timeframe} with target profit ${targetProfit}. Strategy: ${methodLabel}. Be concise and actionable. Reply with JSON: { "steps": ["step1","step2",...], "explanation": "short summary" }`
         },
-        { role: 'user', content: 'Explain the full process.' }
+        { role: 'user', content: `Today is ${today}. Explain the full process.` }
       ],
       temperature: 0.4,
       max_tokens: 500
@@ -219,6 +229,7 @@ exports.methodExplanation = async (stockName, action, timeframe, targetProfit, m
 /** Full analysis: 4 levers, 3 paragraphs (intraday/week/month), entry/exit ranges, stop loss, take profit */
 exports.fullAnalysis = async (stockName, action, timeframe, leversConfig, options = {}) => {
   const c = getClient();
+  const today = getCurrentDate();
   const leverSummary = leversConfig && leversConfig.length
     ? leversConfig.map((l) => `${l.leverName}: intraday buy ${l.intradayBuyPct}% sell ${l.intradaySellPct}%, week buy ${l.weekBuyPct}% sell ${l.weekSellPct}%, month buy ${l.monthBuyPct}% sell ${l.monthSellPct}%`).join('; ')
     : 'No lever weights configured.';
@@ -238,20 +249,21 @@ exports.fullAnalysis = async (stockName, action, timeframe, leversConfig, option
       messages: [
         {
           role: 'system',
-          content: `You are a stock analyst. Analyze the stock using these 4 levers (prioritize by the given weights):
-1) Global market situation
+          content: `CRITICAL: Today's date is ${today}. You MUST base ALL analysis on this date. Use market data, news, sentiment, and technicals as of ${today}. Do NOT use old dates (e.g. January 2023 or any past year). If your training data is older, state that and give the best analysis possible as of ${today}.
+You are a stock analyst. Analyze the stock using these 4 levers (prioritize by the given weights):
+1) Global market situation (as of ${today})
 2) Fundamentals of the stock
-3) News & sentiment on the stock
+3) News & sentiment on the stock (current/recent)
 4) Technical analysis (moving averages, volumes)
 
 Admin-configured lever weights for this stock (use as prioritization): ${leverSummary}
 
 Generate:
-- 3 paragraphs: one for Intraday expectation, one for Weekly, one for Monthly.
+- 3 paragraphs: one for Intraday expectation, one for Weekly, one for Monthly (all relative to ${today}).
 - Entry price range and Exit price range (guidance only).
 - Stop Loss price and Take Profit (Stop Profit) price.
 
-Consider: last month intraday fluctuations, open/close for ~20 sessions, major news (US/India trade, geopolitics, Fed, employment, quarterly results, dividends), and overall sentiment for day/week/month.
+Consider: recent intraday fluctuations, open/close for recent sessions, major news (US/India trade, geopolitics, Fed, employment, quarterly results, dividends), and overall sentiment for day/week/month as of ${today}.
 
 Reply with JSON only: {
   "intradayParagraph": "...",
@@ -263,7 +275,7 @@ Reply with JSON only: {
   "takeProfit": "e.g. 2520"
 }`
         },
-        { role: 'user', content: `Stock: ${stockName}. Action: ${action}. Timeframe: ${timeframe}.` }
+        { role: 'user', content: `Today is ${today}. Stock: ${stockName}. Action: ${action}. Timeframe: ${timeframe}.` }
       ],
       temperature: 0.4,
       max_tokens: 1200
