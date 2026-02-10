@@ -5,6 +5,7 @@ const AskSandyUser = require('../models/AskSandyUser');
 const AskSandyPortfolio = require('../models/AskSandyPortfolio');
 const AskSandyTradeSession = require('../models/AskSandyTradeSession');
 const AskSandyLever = require('../models/AskSandyLever');
+const AskSandyInsight = require('../models/AskSandyInsight');
 const { protectAskSandy } = require('../middleware/askSandyAuth');
 const generateAskSandyToken = require('../utils/askSandyJwt');
 const askSandyService = require('../services/askSandyService');
@@ -328,6 +329,64 @@ router.get('/levers/:stockSymbol', protectAskSandy, async (req, res) => {
     res.json({ success: true, levers: doc || null });
   } catch (err) {
     res.status(500).json({ success: false, levers: null });
+  }
+});
+
+// POST /api/ask-sandy/question-analysis — user questions/challenges the analysis; GPT may revise
+router.post('/question-analysis', protectAskSandy, async (req, res) => {
+  try {
+    const { stockName, action, timeframe, currentAnalysis, userQuestion } = req.body;
+    if (!stockName || !action || !timeframe || !currentAnalysis || !userQuestion || typeof userQuestion !== 'string') {
+      return res.status(400).json({ message: 'stockName, action, timeframe, currentAnalysis, and userQuestion (non-empty string) required.' });
+    }
+    const result = await askSandyService.questionAnalysis(
+      stockName,
+      action,
+      timeframe,
+      currentAnalysis,
+      userQuestion.trim()
+    );
+    const insight = await AskSandyInsight.create({
+      userId: req.askSandyUser._id,
+      stockName,
+      action,
+      timeframe,
+      userInput: userQuestion.trim(),
+      gptResponse: result.explanation + (result.revisedAnalysis ? '\n[Revised analysis applied.]' : ''),
+      fruitful: false,
+      revisedAnalysis: result.revisedAnalysis || undefined
+    });
+    res.json({
+      success: true,
+      revisedAnalysis: result.revisedAnalysis,
+      explanation: result.explanation,
+      agreed: result.agreed,
+      insightId: insight._id.toString()
+    });
+  } catch (err) {
+    res.status(500).json({ message: 'Question analysis failed.', error: err.message });
+  }
+});
+
+// POST /api/ask-sandy/insight-mark-fruitful — mark a user insight as helpful so it improves future analyses
+router.post('/insight-mark-fruitful', protectAskSandy, async (req, res) => {
+  try {
+    const { insightId } = req.body;
+    if (!insightId) {
+      return res.status(400).json({ message: 'insightId required.' });
+    }
+    const insight = await AskSandyInsight.findOne({
+      _id: insightId,
+      userId: req.askSandyUser._id
+    });
+    if (!insight) {
+      return res.status(404).json({ message: 'Insight not found.' });
+    }
+    insight.fruitful = true;
+    await insight.save();
+    res.json({ success: true, message: 'Marked as helpful; this insight will improve future analyses.' });
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to mark insight.', error: err.message });
   }
 });
 

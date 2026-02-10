@@ -236,7 +236,28 @@ You are a trading advisor. Explain the entire process in clear, numbered steps f
   }
 };
 
-/** Full analysis: 4 levers, 3 paragraphs (intraday/week/month), entry/exit ranges, stop loss, take profit */
+/** Fetch fruitful insights to inject into fullAnalysis (by stock or global) */
+async function getInsightsForAnalysis(stockName) {
+  const AskSandyInsight = require('../models/AskSandyInsight');
+  const docs = await AskSandyInsight.find({ fruitful: true })
+    .sort({ updatedAt: -1 })
+    .limit(20)
+    .lean();
+  const sn = stockName ? String(stockName).trim().toLowerCase() : '';
+  const globalOrRelevant = docs.filter((d) => {
+    if (!d.stockSymbol && !d.stockName) return true;
+    if (!sn) return true;
+    if (d.stockSymbol && String(d.stockSymbol).toLowerCase() === sn) return true;
+    if (d.stockName && String(d.stockName).toLowerCase().includes(sn)) return true;
+    return false;
+  });
+  return globalOrRelevant.map((d) => ({
+    userInput: d.userInput,
+    gptResponse: d.gptResponse
+  }));
+}
+
+/** Full analysis: levers, 3 paragraphs (intraday/week/month), entry/exit ranges, stop loss, take profit. Uses stored insights when available. */
 exports.fullAnalysis = async (stockName, action, timeframe, leversConfig, options = {}) => {
   const c = getClient();
   const today = getCurrentDate();
@@ -257,6 +278,10 @@ exports.fullAnalysis = async (stockName, action, timeframe, leversConfig, option
     takeProfit: '-'
   };
   if (!c) return fallback;
+  const insights = await getInsightsForAnalysis(stockName);
+  const insightsBlock = insights.length
+    ? `\n\nVALIDATED USER INSIGHTS (use these to improve accuracy; users have flagged these as helpful):\n${insights.map((i, idx) => `[${idx + 1}] User said: "${i.userInput}". Model response considered helpful: "${i.gptResponse}"`).join('\n')}`
+    : '';
   const priceAnchorBlock = currentPriceAnchor != null
     ? `ANCHOR PRICE (MANDATORY): The user has provided the CURRENT MARKET PRICE for ${stockName} as of ${priceDate}: ${currentPriceAnchor}. You MUST use this as the ONLY baseline. Do NOT use any price, resistance level, or target from your training data (your data may be from 2023 or earlier). All entry range, exit range, stop loss, and take profit MUST be calculated relative to this current price (${currentPriceAnchor}). For example, if current price is ${currentPriceAnchor}, suggest entry/exit/stop/target as small percentages or absolute levels around ${currentPriceAnchor}, not old historical levels. Today's date is ${today}; treat ${priceDate} as the reference date for this price.`
     : `Today's date is ${today}. You do not have a user-provided current price; still do NOT use specific price levels from old training data (e.g. 2023). Use relative terms (e.g. "above recent support") or ask the user to provide current price for precise levels.`;
@@ -268,11 +293,7 @@ exports.fullAnalysis = async (stockName, action, timeframe, leversConfig, option
           role: 'system',
           content: `${priceAnchorBlock}
 
-You are a stock analyst. Analyze the stock using these 4 levers (prioritize by the given weights):
-1) Global market situation (as of ${today} — today's sentiment, geopolitics, rates)
-2) Fundamentals of the stock
-3) News & sentiment on the stock (current/recent, not 2023)
-4) Technical analysis (moving averages, volumes) — relative to the anchor price above if given
+You are a stock analyst. Analyze the stock using the admin-configured levers (prioritize by the given weights).${insightsBlock}
 
 Admin-configured lever weights: ${leverSummary}
 
@@ -321,6 +342,57 @@ Reply with JSON only: {
     return result;
   } catch (err) {
     console.error('Ask Sandy fullAnalysis:', err?.message);
+    return fallback;
+  }
+};
+
+/** User questions/challenges the analysis; GPT may revise numbers if it agrees. Returns revised analysis and explanation. */
+exports.questionAnalysis = async (stockName, action, timeframe, currentAnalysis, userQuestion, options = {}) => {
+  const c = getClient();
+  const today = getCurrentDate();
+  const fallback = {
+    revisedAnalysis: null,
+    explanation: 'AI not configured.',
+    agreed: false
+  };
+  if (!c) return fallback;
+  const analysisText = currentAnalysis
+    ? `Intraday: ${currentAnalysis.intradayParagraph || ''}\nWeekly: ${currentAnalysis.weeklyParagraph || ''}\nMonthly: ${currentAnalysis.monthlyParagraph || ''}\nEntry: ${currentAnalysis.entryRange || ''}\nExit: ${currentAnalysis.exitRange || ''}\nStop loss: ${currentAnalysis.stopLoss || ''}\nTake profit: ${currentAnalysis.takeProfit || ''}`
+    : '';
+  try {
+    const completion = await c.chat.completions.create({
+      model,
+      messages: [
+        {
+          role: 'system',
+          content: `Today's date is ${today}. You are a stock analyst. The user has received the following analysis for ${stockName} (action: ${action}, timeframe: ${timeframe}) and is now questioning or challenging it.
+
+If the user's point is valid (e.g. they correct a number, cite a fact, or raise a concern you agree with), you MUST produce a revised analysis with updated numbers/paragraphs where appropriate. If you disagree, explain why and do not change the analysis.
+
+Reply with JSON only: {
+  "agreed": true or false,
+  "explanation": "Short explanation of your response and whether you revised the analysis.",
+  "revisedAnalysis": if you revised: { "intradayParagraph": "...", "weeklyParagraph": "...", "monthlyParagraph": "...", "entryRange": "...", "exitRange": "...", "stopLoss": "...", "takeProfit": "..." } else null
+}`
+        },
+        {
+          role: 'user',
+          content: `Current analysis:\n${analysisText}\n\nUser's question or rebuttal: ${userQuestion}`
+        }
+      ],
+      temperature: 0.4,
+      max_tokens: 1200
+    });
+    const text = completion.choices?.[0]?.message?.content?.trim();
+    const out = parseJson(text);
+    const revised = out?.revisedAnalysis && typeof out.revisedAnalysis === 'object' ? out.revisedAnalysis : null;
+    return {
+      revisedAnalysis: revised,
+      explanation: out?.explanation || 'No explanation.',
+      agreed: !!out?.agreed
+    };
+  } catch (err) {
+    console.error('Ask Sandy questionAnalysis:', err?.message);
     return fallback;
   }
 };
