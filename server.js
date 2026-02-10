@@ -4,6 +4,7 @@ const cors = require('cors');
 const http = require('http');
 const socketIo = require('socket.io');
 const session = require('express-session');
+const MongoStore = require('connect-mongo');
 const passport = require('passport');
 require('dotenv').config();
 const { ensureDefaultPlans } = require('./utils/planDefaults');
@@ -51,12 +52,17 @@ app.use(express.urlencoded({ extended: true, limit: '200mb' }));
 app.use('/uploads', express.static('uploads'));
 
 // Session configuration for OAuth (optional, but recommended)
-app.use(session({
+// In production use MongoDB store to avoid MemoryStore warning and to scale
+const sessionOpts = {
   secret: process.env.SESSION_SECRET || 'your-secret-key-change-in-production',
   resave: false,
   saveUninitialized: false,
   cookie: { secure: process.env.NODE_ENV === 'production' }
-}));
+};
+if (process.env.NODE_ENV === 'production' && process.env.MONGODB_URI) {
+  sessionOpts.store = MongoStore.create({ mongoUrl: process.env.MONGODB_URI });
+}
+app.use(session(sessionOpts));
 
 // Initialize Passport
 app.use(passport.initialize());
@@ -80,6 +86,14 @@ mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/globalcar
   }
 })
 .catch(err => console.error('MongoDB Connection Error:', err));
+
+// Health check for Render / load balancers (must be before other routes if you need it first)
+app.get('/api/health', (req, res) => {
+  res.status(200).json({ ok: true, timestamp: new Date().toISOString() });
+});
+app.get('/', (req, res) => {
+  res.status(200).send('OK');
+});
 
 // Routes
 app.use('/api/auth', require('./routes/auth'));
