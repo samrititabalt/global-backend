@@ -368,6 +368,46 @@ router.post('/question-analysis', protectAskSandy, async (req, res) => {
   }
 });
 
+// POST /api/ask-sandy/portfolio-health — analyze portfolio and suggest reallocation (temperament, time horizon, reallocation preference)
+router.post('/portfolio-health', protectAskSandy, async (req, res) => {
+  try {
+    const { userTemperament, timeHorizon, reallocationPreference } = req.body;
+    if (!userTemperament || !timeHorizon || !reallocationPreference) {
+      return res.status(400).json({ message: 'userTemperament, timeHorizon, and reallocationPreference are required.' });
+    }
+    const portfolioItems = await AskSandyPortfolio.find({ userId: req.askSandyUser._id }).sort({ createdAt: -1 }).lean();
+    const symbols = [...new Set(portfolioItems.map((p) => (p.symbol || p.stockName || '').trim()).filter(Boolean))];
+    const leverDocs = await AskSandyLever.find({
+      $or: [
+        { stockSymbol: { $in: symbols } },
+        ...symbols.map((s) => ({ stockName: new RegExp(s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') }))
+      ]
+    }).lean();
+    const leversBySymbol = {};
+    leverDocs.forEach((doc) => {
+      const key = doc.stockSymbol || doc.stockName || '';
+      if (key) leversBySymbol[key] = doc;
+    });
+    portfolioItems.forEach((p) => {
+      const sym = (p.symbol || p.stockName || '').trim();
+      if (sym && !leversBySymbol[sym]) {
+        const found = leverDocs.find((d) => d.stockName && String(d.stockName).toLowerCase().includes(sym.toLowerCase()));
+        if (found) leversBySymbol[sym] = found;
+      }
+    });
+    const result = await askSandyService.portfolioHealthAnalysis(
+      portfolioItems,
+      userTemperament,
+      timeHorizon,
+      reallocationPreference,
+      leversBySymbol
+    );
+    res.json({ success: true, summary: result.summary, actions: result.actions });
+  } catch (err) {
+    res.status(500).json({ message: 'Portfolio health analysis failed.', error: err.message });
+  }
+});
+
 // POST /api/ask-sandy/insight-mark-fruitful — mark a user insight as helpful so it improves future analyses
 router.post('/insight-mark-fruitful', protectAskSandy, async (req, res) => {
   try {

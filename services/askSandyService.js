@@ -401,3 +401,100 @@ Reply with JSON only: {
     return fallback;
   }
 };
+
+/** Portfolio health and reallocation: deep analysis using temperament, time horizon, reallocation preference, levers, and portfolio data. */
+exports.portfolioHealthAnalysis = async (portfolioItems, userTemperament, timeHorizon, reallocationPreference, leversBySymbol) => {
+  const c = getClient();
+  const today = getCurrentDate();
+  const fallback = { summary: 'Analysis unavailable.', actions: [] };
+  if (!c) return fallback;
+  const portfolioText = (portfolioItems || []).map((p) => {
+    const name = p.stockName || p.symbol || 'Unknown';
+    const qty = Number(p.quantity);
+    const avg = Number(p.avgBuyPrice);
+    const cur = p.currentPrice != null ? Number(p.currentPrice) : null;
+    const pl = cur != null && Number.isFinite(avg) && Number.isFinite(qty) ? (cur - avg) * qty : null;
+    return `${name}: quantity ${qty}, avg buy ${avg}, current price ${cur != null ? cur : 'not set'}, P/L ${pl != null ? pl.toFixed(2) : '—'}`;
+  }).join('\n');
+  const leverText = leversBySymbol && Object.keys(leversBySymbol).length
+    ? Object.entries(leversBySymbol).map(([sym, levers]) => {
+        const arr = Array.isArray(levers) ? levers : (levers?.levers || []);
+        const sum = arr.map((l) => {
+          const intra = l.intradayPct != null ? l.intradayPct : (l.intradayBuyPct != null ? (Number(l.intradayBuyPct) + Number(l.intradaySellPct ?? l.intradayBuyPct)) / 2 : 0);
+          const week = l.weekPct != null ? l.weekPct : (l.weekBuyPct != null ? (Number(l.weekBuyPct) + Number(l.weekSellPct ?? l.weekBuyPct)) / 2 : 0);
+          const month = l.monthPct != null ? l.monthPct : (l.monthBuyPct != null ? (Number(l.monthBuyPct) + Number(l.monthSellPct ?? l.monthBuyPct)) / 2 : 0);
+          return `${l.leverName}: intraday ${intra}%, week ${week}%, month ${month}%`;
+        }).join('; ');
+        return `Stock ${sym}: ${sum || 'no levers'}`;
+      }).join('\n')
+    : 'No admin lever weights configured.';
+
+  const systemPrompt = `Today's date is ${today}. You are a portfolio analyst. The user has shared their portfolio and three preferences. You MUST prioritize these heavily.
+
+USER TEMPERAMENT (prioritize heavily):
+- "I am an extremely cautious person, so keep my bets tied to safe stocks." → Prefer safer, large-cap/blue-chip stocks (e.g. Nifty names like SBI, Reliance, HDFC). Lower volatility.
+- "I am an extremely growth-oriented person and you can try aggressive models." → Allow more exposure to higher-volatility/small-cap or mid-cap ideas.
+- "I am an average taker of both risk and caution, I will have AI decide." → Mix of both; you decide allocation.
+
+TIME HORIZON (factor into rebalancing and rotation):
+- Long Term: Can hold and rebalance less aggressively; can suggest names where money may be tied longer.
+- Medium Term: Moderate rebalancing; balance hold vs trim.
+- Short Term: More aggressive rebalancing; short-term users want to book profits early—do NOT suggest options where money can be tied for several months. Favor ideas that can be turned around quickly.
+
+REALLOCATION PREFERENCE:
+- "I would like to buy more units of existing stocks within my portfolio to average." → Only suggest adding/averaging within existing holdings.
+- "I want to sell some existing units of my underperforming stocks and buy stocks with better prospects within the existing portfolio. Basically I want to shuffle within the portfolio." → Sell/trim underperformers, buy more of better prospects within the SAME portfolio only.
+- "I want to sell a few existing stocks and buy completely new stocks. AI to recommend." → Suggest which to sell and recommend NEW stocks to add (aligned with temperament + time horizon).
+- "I want to do both; redistribute units in the existing portfolio and also buy new stocks. AI to recommend." → Both: reshuffle within portfolio AND suggest new stocks to add.
+
+Perform a deep portfolio analysis using:
+- Current portfolio holdings and current price of each stock
+- Admin-defined lever weights (use where provided)
+- Fundamentals, current market dynamics, geopolitics, macro news, recent company news (earnings, dividends, guidance)
+- Patterns: all-time highs, 52-week highs, cyclical peaks/troughs, likely profit-booking zones
+
+Do the following:
+1. Identify stocks near peaks (all-time high / 52-week high / strong run-up) where profit booking is likely, downside or consolidation is probable—suggest trim or exit (partial/full).
+2. Identify stocks at relatively lower price points or attractive valuations where upside is higher and risk/reward is favorable—suggest add or accumulate.
+3. Suggest: which to sell or reduce; which to buy more of within the portfolio; when user chose "new stocks" or "both", suggest new stocks to add (aligned with temperament + time horizon).
+4. Explain in plain language (e.g. "This stock appears to be completing a cycle near its recent high; profit booking is likely." "You could sell part of this position and rotate into this other stock which is at a lower price zone." "You may later re-enter the original stock if it returns to support/resistance range.").
+5. Always respect User Temperament: cautious → safer large-cap; growth-oriented → more aggressive; balanced → blended.
+
+Reply with JSON only: {
+  "summary": "One paragraph overall portfolio health and approach.",
+  "actions": ["Action 1: e.g. Reduce Stock A by X units, reallocate into Stock B.", "Action 2: Hold Stock C; avoid changes due to current risk profile.", "Action 3: Consider adding Stock D as a new position (if applicable)."]
+}
+Keep actions clear and actionable. If portfolio is empty, say so in summary and leave actions empty.`;
+
+  const userContent = `Portfolio (each line: name, quantity, avg buy, current price, P/L):
+${portfolioText || 'No holdings.'}
+
+Admin lever weights (per stock where available):
+${leverText}
+
+User Temperament: ${userTemperament || 'Not selected'}
+Time Horizon: ${timeHorizon || 'Not selected'}
+Reallocation preference: ${reallocationPreference || 'Not selected'}
+
+Provide the portfolio health summary and list of recommended actions as JSON.`;
+
+  try {
+    const completion = await c.chat.completions.create({
+      model,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userContent }
+      ],
+      temperature: 0.4,
+      max_tokens: 2000
+    });
+    const text = completion.choices?.[0]?.message?.content?.trim();
+    const out = parseJson(text);
+    const summary = out?.summary && typeof out.summary === 'string' ? out.summary : fallback.summary;
+    const actions = Array.isArray(out?.actions) ? out.actions.filter((a) => typeof a === 'string') : fallback.actions;
+    return { summary, actions };
+  } catch (err) {
+    console.error('Ask Sandy portfolioHealthAnalysis:', err?.message);
+    return fallback;
+  }
+};
