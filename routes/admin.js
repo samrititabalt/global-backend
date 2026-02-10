@@ -41,6 +41,8 @@ const { generateAIResponse } = require('../services/openaiService');
 const { DEFAULT_PLANS } = require('../constants/defaultPlans');
 const { DEFAULT_MARKET_RESEARCH_DECK } = require('../data/defaultMarketResearchDeck');
 const { DEFAULT_AGENCIES_DECK } = require('../data/defaultAgenciesDeck');
+const AskSandyLever = require('../models/AskSandyLever');
+const askSandyService = require('../services/askSandyService');
 
 // Helper to parse JSON with fallback (used for AI deck edits)
 const parseJsonWithFallback = (text) => {
@@ -694,6 +696,119 @@ router.post(
     }
   }
 );
+
+// ========== ASK SANDY — ACCESS CODE & LEVERS ==========
+
+// @route   GET /api/admin/ask-sandy-access-code
+// @desc    Get Ask Sandy secret access code (for homepage gate)
+// @access  Private (Admin)
+router.get('/ask-sandy-access-code', protect, authorize('admin'), async (req, res) => {
+  try {
+    const code = await SiteSetting.get('ask_sandy_access_code', '9899364215');
+    res.json({ success: true, code });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   PUT /api/admin/ask-sandy-access-code
+// @desc    Update Ask Sandy secret access code
+// @access  Private (Admin)
+router.put('/ask-sandy-access-code', protect, authorize('admin'), async (req, res) => {
+  try {
+    const code = typeof req.body?.code === 'string' ? req.body.code.trim() : '';
+    if (!code) return res.status(400).json({ message: 'Code is required.' });
+    await SiteSetting.set('ask_sandy_access_code', code);
+    res.json({ success: true, code });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   GET /api/admin/ask-sandy-levers
+// @desc    List all Ask Sandy lever configs (e.g. Nifty 50)
+// @access  Private (Admin)
+router.get('/ask-sandy-levers', protect, authorize('admin'), async (req, res) => {
+  try {
+    const list = await AskSandyLever.find({}).sort({ stockSymbol: 1 });
+    res.json({ success: true, levers: list });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   POST /api/admin/ask-sandy-levers/seed-nifty50
+// @desc    Seed Nifty 50 stocks with placeholder lever structure (via GPT)
+// @access  Private (Admin)
+router.post('/ask-sandy-levers/seed-nifty50', protect, authorize('admin'), async (req, res) => {
+  try {
+    const stocks = await askSandyService.getNifty50List();
+    const placeholderLever = [
+      { leverName: 'Global Market Sentiment', intradayBuyPct: 25, intradaySellPct: 25, weekBuyPct: 25, weekSellPct: 25, monthBuyPct: 25, monthSellPct: 25 },
+      { leverName: 'Company Fundamentals', intradayBuyPct: 25, intradaySellPct: 25, weekBuyPct: 25, weekSellPct: 25, monthBuyPct: 25, monthSellPct: 25 },
+      { leverName: 'News & Sentiment', intradayBuyPct: 25, intradaySellPct: 25, weekBuyPct: 25, weekSellPct: 25, monthBuyPct: 25, monthSellPct: 25 },
+      { leverName: 'Technical Analysis', intradayBuyPct: 25, intradaySellPct: 25, weekBuyPct: 25, weekSellPct: 25, monthBuyPct: 25, monthSellPct: 25 }
+    ];
+    let created = 0;
+    for (const s of stocks) {
+      const symbol = (s.symbol || s.name || '').trim();
+      if (!symbol) continue;
+      const existing = await AskSandyLever.findOne({ stockSymbol: symbol });
+      if (!existing) {
+        await AskSandyLever.create({
+          stockSymbol: symbol,
+          stockName: (s.name || symbol).trim(),
+          levers: placeholderLever.map((l) => ({ ...l }))
+        });
+        created++;
+      }
+    }
+    const list = await AskSandyLever.find({}).sort({ stockSymbol: 1 });
+    res.json({ success: true, created, levers: list });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   GET /api/admin/ask-sandy-levers/:symbol
+// @desc    Get lever config for one stock
+// @access  Private (Admin)
+router.get('/ask-sandy-levers/:symbol', protect, authorize('admin'), async (req, res) => {
+  try {
+    const doc = await AskSandyLever.findOne({ stockSymbol: req.params.symbol });
+    if (!doc) return res.status(404).json({ message: 'Stock not found.' });
+    res.json({ success: true, lever: doc });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   PUT /api/admin/ask-sandy-levers/:symbol
+// @desc    Update lever config for one stock (percentages per scenario should sum to 100)
+// @access  Private (Admin)
+router.put('/ask-sandy-levers/:symbol', protect, authorize('admin'), async (req, res) => {
+  try {
+    const { stockName, levers } = req.body;
+    const doc = await AskSandyLever.findOne({ stockSymbol: req.params.symbol });
+    if (!doc) return res.status(404).json({ message: 'Stock not found.' });
+    if (stockName !== undefined) doc.stockName = String(stockName).trim();
+    if (Array.isArray(levers)) {
+      doc.levers = levers.map((l) => ({
+        leverName: l.leverName || 'Lever',
+        intradayBuyPct: Number(l.intradayBuyPct) || 0,
+        intradaySellPct: Number(l.intradaySellPct) || 0,
+        weekBuyPct: Number(l.weekBuyPct) || 0,
+        weekSellPct: Number(l.weekSellPct) || 0,
+        monthBuyPct: Number(l.monthBuyPct) || 0,
+        monthSellPct: Number(l.monthSellPct) || 0
+      }));
+    }
+    await doc.save();
+    res.json({ success: true, lever: doc });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
 
 // ========== AGENT MANAGEMENT ==========
 

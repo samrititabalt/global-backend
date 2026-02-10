@@ -618,6 +618,20 @@ router.get('/first-call-deck-agencies', async (req, res) => {
   }
 });
 
+// @route   POST /api/public/validate-ask-sandy-code
+// @desc    Validate Ask Sandy secret access code (gate for Ask Sandy page)
+// @access  Public
+router.post('/validate-ask-sandy-code', async (req, res) => {
+  try {
+    const code = typeof req.body?.code === 'string' ? req.body.code.trim() : '';
+    const stored = await SiteSetting.get('ask_sandy_access_code', '9899364215');
+    const valid = code === stored;
+    res.json({ success: valid, valid });
+  } catch (error) {
+    res.status(500).json({ success: false, valid: false });
+  }
+});
+
 // @route   POST /api/public/market-research/validate
 // @desc    Validate Market Research Platform access
 // @access  Public
