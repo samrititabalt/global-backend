@@ -200,11 +200,23 @@ router.post('/stock-suggest', async (req, res) => {
 // POST /api/ask-sandy/trade-challenge
 router.post('/trade-challenge', protectAskSandy, async (req, res) => {
   try {
-    const { stockName, action, timeframe } = req.body;
+    const { stockName, action, timeframe, portfolioId, currentPrice: bodyPrice, priceAsOfDate: bodyDate } = req.body;
     if (!stockName || !action || !timeframe) {
       return res.status(400).json({ message: 'stockName, action, and timeframe required.' });
     }
-    const result = await askSandyService.tradeChallenge(stockName, action, timeframe);
+    let currentPrice = bodyPrice != null ? Number(bodyPrice) : null;
+    let priceAsOfDate = bodyDate || null;
+    if (currentPrice == null && portfolioId) {
+      const holding = await AskSandyPortfolio.findOne({
+        _id: portfolioId,
+        userId: req.askSandyUser._id
+      });
+      if (holding && holding.currentPrice != null) {
+        currentPrice = Number(holding.currentPrice);
+        priceAsOfDate = holding.priceAsOfDate ? new Date(holding.priceAsOfDate).toISOString().slice(0, 10) : null;
+      }
+    }
+    const result = await askSandyService.tradeChallenge(stockName, action, timeframe, { currentPrice, priceAsOfDate });
     res.json({ success: true, ...result });
   } catch (err) {
     res.status(500).json({ message: 'Challenge failed.', error: err.message });
@@ -237,6 +249,31 @@ router.post('/trade-analysis', protectAskSandy, async (req, res) => {
     if (!stockName || !action || !timeframe) {
       return res.status(400).json({ message: 'stockName, action, and timeframe required.' });
     }
+    let currentPrice = null;
+    let priceAsOfDate = null;
+    if (portfolioId) {
+      const holding = await AskSandyPortfolio.findOne({
+        _id: portfolioId,
+        userId: req.askSandyUser._id
+      });
+      if (holding && holding.currentPrice != null) {
+        currentPrice = Number(holding.currentPrice);
+        priceAsOfDate = holding.priceAsOfDate ? new Date(holding.priceAsOfDate).toISOString().slice(0, 10) : null;
+      }
+    }
+    if (currentPrice == null) {
+      const holding = await AskSandyPortfolio.findOne({
+        userId: req.askSandyUser._id,
+        $or: [
+          { stockName: new RegExp(stockName.trim(), 'i') },
+          { symbol: new RegExp(stockName.trim(), 'i') }
+        ]
+      }).sort({ updatedAt: -1 });
+      if (holding && holding.currentPrice != null) {
+        currentPrice = Number(holding.currentPrice);
+        priceAsOfDate = holding.priceAsOfDate ? new Date(holding.priceAsOfDate).toISOString().slice(0, 10) : null;
+      }
+    }
     const leverDoc = await AskSandyLever.findOne({
       $or: [
         { stockSymbol: stockName.trim() },
@@ -246,7 +283,9 @@ router.post('/trade-analysis', protectAskSandy, async (req, res) => {
     const leversConfig = leverDoc?.levers || [];
     const analysis = await askSandyService.fullAnalysis(stockName, action, timeframe, leversConfig, {
       targetProfit: targetProfit != null ? Number(targetProfit) : undefined,
-      method: method || undefined
+      method: method || undefined,
+      currentPrice: currentPrice != null ? currentPrice : undefined,
+      priceAsOfDate: priceAsOfDate || undefined
     });
     const session = await AskSandyTradeSession.create({
       userId: req.askSandyUser._id,

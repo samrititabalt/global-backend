@@ -88,25 +88,30 @@ exports.getStockPrice = async (symbolOrName) => {
 };
 
 /** Trade challenge: if user chose Sell, GPT may suggest Buy with reasons */
-exports.tradeChallenge = async (stockName, userAction, timeframe) => {
+exports.tradeChallenge = async (stockName, userAction, timeframe, options = {}) => {
   const c = getClient();
   const today = getCurrentDate();
+  const priceDate = options.priceAsOfDate || today;
+  const currentPrice = options.currentPrice != null && Number.isFinite(Number(options.currentPrice)) ? Number(options.currentPrice) : null;
   if (!c) {
     return { suggestAction: userAction, reason: 'AI not configured.', shouldSwitch: false };
   }
+  const priceContext = currentPrice != null
+    ? ` The user's current market price for this stock (as of ${priceDate}) is ${currentPrice}. Use today's date (${today}) and this price level — do NOT use old data from 2023 or earlier.`
+    : ` Use today's date ${today}. Do NOT use price levels or sentiment from 2023 or earlier.`;
   try {
     const completion = await c.chat.completions.create({
       model,
       messages: [
         {
           role: 'system',
-          content: `IMPORTANT: Today's date is ${today}. Base all reasoning on market conditions, news, and sentiment as of this date. Do NOT use outdated dates (e.g. 2023).
+          content: `IMPORTANT: Today's date is ${today}. Base all reasoning on market conditions, news, and sentiment as of THIS date. Do NOT use outdated dates (e.g. 2023).${priceContext}
 You are a polite trading advisor. The user has chosen to ${userAction} for ${stockName} (timeframe: ${timeframe}). 
 If they chose SELL but you believe the stock is likely to grow (fundamentals, sentiment, news as of ${today}), politely suggest they consider BUY instead and give 2-3 short reasons. Do NOT suggest Intraday vs Week vs Month - only Buy vs Sell.
 If they chose BUY and you think it's reasonable, say "Your choice seems reasonable" and suggestAction: "buy".
 Reply with JSON only: { "suggestAction": "buy" or "sell", "reason": "string", "shouldSwitch": boolean }.`
         },
-        { role: 'user', content: `Today is ${today}. Stock: ${stockName}. User chose: ${userAction}. Timeframe: ${timeframe}.` }
+        { role: 'user', content: `Today is ${today}. Stock: ${stockName}. Current price (reference): ${currentPrice != null ? currentPrice : 'not provided'}. User chose: ${userAction}. Timeframe: ${timeframe}.` }
       ],
       temperature: 0.5,
       max_tokens: 400
@@ -198,10 +203,15 @@ exports.getNifty50List = async () => {
 };
 
 /** Get method explanation when user has chosen multiple_small or few_big */
-exports.methodExplanation = async (stockName, action, timeframe, targetProfit, method) => {
+exports.methodExplanation = async (stockName, action, timeframe, targetProfit, method, options = {}) => {
   const c = getClient();
   const today = getCurrentDate();
+  const priceDate = options.priceAsOfDate || today;
+  const currentPrice = options.currentPrice != null && Number.isFinite(Number(options.currentPrice)) ? Number(options.currentPrice) : null;
   if (!c) return { steps: [], explanation: 'AI not configured.' };
+  const priceContext = currentPrice != null
+    ? ` User's current price (as of ${priceDate}): ${currentPrice}. Base steps on this price and today (${today}), not old data.`
+    : ` Use today (${today}). Do not reference 2023 or old prices.`;
   try {
     const methodLabel = method === 'multiple_small' ? 'Multiple Small Trades' : 'Few Big Trades';
     const completion = await c.chat.completions.create({
@@ -209,10 +219,10 @@ exports.methodExplanation = async (stockName, action, timeframe, targetProfit, m
       messages: [
         {
           role: 'system',
-          content: `Today's date is ${today}. Base your explanation on current market context.
+          content: `Today's date is ${today}.${priceContext}
 You are a trading advisor. Explain the entire process in clear, numbered steps for the chosen strategy. User wants to ${action} ${stockName} over ${timeframe} with target profit ${targetProfit}. Strategy: ${methodLabel}. Be concise and actionable. Reply with JSON: { "steps": ["step1","step2",...], "explanation": "short summary" }`
         },
-        { role: 'user', content: `Today is ${today}. Explain the full process.` }
+        { role: 'user', content: `Today is ${today}. Current price: ${currentPrice != null ? currentPrice : 'N/A'}. Explain the full process.` }
       ],
       temperature: 0.4,
       max_tokens: 500
@@ -230,6 +240,10 @@ You are a trading advisor. Explain the entire process in clear, numbered steps f
 exports.fullAnalysis = async (stockName, action, timeframe, leversConfig, options = {}) => {
   const c = getClient();
   const today = getCurrentDate();
+  const priceDate = options.priceAsOfDate || today;
+  const currentPriceAnchor = options.currentPrice != null && Number.isFinite(Number(options.currentPrice))
+    ? Number(options.currentPrice)
+    : null;
   const leverSummary = leversConfig && leversConfig.length
     ? leversConfig.map((l) => `${l.leverName}: intraday buy ${l.intradayBuyPct}% sell ${l.intradaySellPct}%, week buy ${l.weekBuyPct}% sell ${l.weekSellPct}%, month buy ${l.monthBuyPct}% sell ${l.monthSellPct}%`).join('; ')
     : 'No lever weights configured.';
@@ -243,39 +257,40 @@ exports.fullAnalysis = async (stockName, action, timeframe, leversConfig, option
     takeProfit: '-'
   };
   if (!c) return fallback;
+  const priceAnchorBlock = currentPriceAnchor != null
+    ? `ANCHOR PRICE (MANDATORY): The user has provided the CURRENT MARKET PRICE for ${stockName} as of ${priceDate}: ${currentPriceAnchor}. You MUST use this as the ONLY baseline. Do NOT use any price, resistance level, or target from your training data (your data may be from 2023 or earlier). All entry range, exit range, stop loss, and take profit MUST be calculated relative to this current price (${currentPriceAnchor}). For example, if current price is ${currentPriceAnchor}, suggest entry/exit/stop/target as small percentages or absolute levels around ${currentPriceAnchor}, not old historical levels. Today's date is ${today}; treat ${priceDate} as the reference date for this price.`
+    : `Today's date is ${today}. You do not have a user-provided current price; still do NOT use specific price levels from old training data (e.g. 2023). Use relative terms (e.g. "above recent support") or ask the user to provide current price for precise levels.`;
   try {
     const completion = await c.chat.completions.create({
       model,
       messages: [
         {
           role: 'system',
-          content: `CRITICAL: Today's date is ${today}. You MUST base ALL analysis on this date. Use market data, news, sentiment, and technicals as of ${today}. Do NOT use old dates (e.g. January 2023 or any past year). If your training data is older, state that and give the best analysis possible as of ${today}.
-You are a stock analyst. Analyze the stock using these 4 levers (prioritize by the given weights):
-1) Global market situation (as of ${today})
-2) Fundamentals of the stock
-3) News & sentiment on the stock (current/recent)
-4) Technical analysis (moving averages, volumes)
+          content: `${priceAnchorBlock}
 
-Admin-configured lever weights for this stock (use as prioritization): ${leverSummary}
+You are a stock analyst. Analyze the stock using these 4 levers (prioritize by the given weights):
+1) Global market situation (as of ${today} — today's sentiment, geopolitics, rates)
+2) Fundamentals of the stock
+3) News & sentiment on the stock (current/recent, not 2023)
+4) Technical analysis (moving averages, volumes) — relative to the anchor price above if given
+
+Admin-configured lever weights: ${leverSummary}
 
 Generate:
-- 3 paragraphs: one for Intraday expectation, one for Weekly, one for Monthly (all relative to ${today}).
-- Entry price range and Exit price range (guidance only).
-- Stop Loss price and Take Profit (Stop Profit) price.
-
-Consider: recent intraday fluctuations, open/close for recent sessions, major news (US/India trade, geopolitics, Fed, employment, quarterly results, dividends), and overall sentiment for day/week/month as of ${today}.
+- 3 paragraphs: Intraday, Weekly, Monthly expectations (all as of ${today}; do not cite 2023 or old dates).
+- Entry range, Exit range, Stop Loss, Take Profit: these MUST be relative to the current price (${currentPriceAnchor != null ? currentPriceAnchor : 'use relative language if no anchor given'}). Do not output 2023 price levels.
 
 Reply with JSON only: {
   "intradayParagraph": "...",
   "weeklyParagraph": "...",
   "monthlyParagraph": "...",
-  "entryRange": "e.g. 2400-2420",
-  "exitRange": "e.g. 2480-2500",
-  "stopLoss": "e.g. 2350",
-  "takeProfit": "e.g. 2520"
+  "entryRange": "e.g. 640-655 (relative to current price)",
+  "exitRange": "e.g. 670-680",
+  "stopLoss": "e.g. 630",
+  "takeProfit": "e.g. 685"
 }`
         },
-        { role: 'user', content: `Today is ${today}. Stock: ${stockName}. Action: ${action}. Timeframe: ${timeframe}.` }
+        { role: 'user', content: `Reference date: ${priceDate}. Today: ${today}. Stock: ${stockName}. Current price (use this): ${currentPriceAnchor != null ? currentPriceAnchor : 'not provided'}. Action: ${action}. Timeframe: ${timeframe}.` }
       ],
       temperature: 0.4,
       max_tokens: 1200
@@ -297,7 +312,8 @@ Reply with JSON only: {
         action,
         timeframe,
         options.targetProfit,
-        options.method
+        options.method,
+        { currentPrice: options.currentPrice, priceAsOfDate: options.priceAsOfDate }
       );
       result.methodExplanation = methodExp.explanation;
       result.methodSteps = methodExp.steps;
