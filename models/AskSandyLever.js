@@ -2,12 +2,9 @@ const mongoose = require('mongoose');
 
 const leverWeightSchema = new mongoose.Schema({
   leverName: { type: String, required: true, trim: true },
-  intradayBuyPct: { type: Number, default: 0, min: 0, max: 100 },
-  intradaySellPct: { type: Number, default: 0, min: 0, max: 100 },
-  weekBuyPct: { type: Number, default: 0, min: 0, max: 100 },
-  weekSellPct: { type: Number, default: 0, min: 0, max: 100 },
-  monthBuyPct: { type: Number, default: 0, min: 0, max: 100 },
-  monthSellPct: { type: Number, default: 0, min: 0, max: 100 }
+  intradayPct: { type: Number, default: 0, min: 0, max: 100 },
+  weekPct: { type: Number, default: 0, min: 0, max: 100 },
+  monthPct: { type: Number, default: 0, min: 0, max: 100 }
 }, { _id: true });
 
 const askSandyLeverSchema = new mongoose.Schema({

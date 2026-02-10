@@ -744,10 +744,10 @@ router.post('/ask-sandy-levers/seed-nifty50', protect, authorize('admin'), async
   try {
     const stocks = await askSandyService.getNifty50List();
     const placeholderLever = [
-      { leverName: 'Global Market Sentiment', intradayBuyPct: 25, intradaySellPct: 25, weekBuyPct: 25, weekSellPct: 25, monthBuyPct: 25, monthSellPct: 25 },
-      { leverName: 'Company Fundamentals', intradayBuyPct: 25, intradaySellPct: 25, weekBuyPct: 25, weekSellPct: 25, monthBuyPct: 25, monthSellPct: 25 },
-      { leverName: 'News & Sentiment', intradayBuyPct: 25, intradaySellPct: 25, weekBuyPct: 25, weekSellPct: 25, monthBuyPct: 25, monthSellPct: 25 },
-      { leverName: 'Technical Analysis', intradayBuyPct: 25, intradaySellPct: 25, weekBuyPct: 25, weekSellPct: 25, monthBuyPct: 25, monthSellPct: 25 }
+      { leverName: 'Global Market Sentiment', intradayPct: 25, weekPct: 25, monthPct: 25 },
+      { leverName: 'Company Fundamentals', intradayPct: 25, weekPct: 25, monthPct: 25 },
+      { leverName: 'News & Sentiment', intradayPct: 25, weekPct: 25, monthPct: 25 },
+      { leverName: 'Technical Analysis', intradayPct: 25, weekPct: 25, monthPct: 25 }
     ];
     let created = 0;
     for (const s of stocks) {
@@ -793,15 +793,21 @@ router.put('/ask-sandy-levers/:symbol', protect, authorize('admin'), async (req,
     if (!doc) return res.status(404).json({ message: 'Stock not found.' });
     if (stockName !== undefined) doc.stockName = String(stockName).trim();
     if (Array.isArray(levers)) {
-      doc.levers = levers.map((l) => ({
-        leverName: l.leverName || 'Lever',
-        intradayBuyPct: Number(l.intradayBuyPct) || 0,
-        intradaySellPct: Number(l.intradaySellPct) || 0,
-        weekBuyPct: Number(l.weekBuyPct) || 0,
-        weekSellPct: Number(l.weekSellPct) || 0,
-        monthBuyPct: Number(l.monthBuyPct) || 0,
-        monthSellPct: Number(l.monthSellPct) || 0
-      }));
+      doc.levers = levers.map((l) => {
+        const num = (val) => (typeof val === 'number' && !Number.isNaN(val)) || (val !== '' && val != null) ? Number(val) : NaN;
+        const fromPct = (pct, buy, sell) => {
+          const v = num(pct);
+          if (!Number.isNaN(v)) return Math.max(0, Math.min(100, v));
+          if (buy != null || sell != null) return Math.max(0, Math.min(100, ((Number(buy) || 0) + (Number(sell) || 0)) / 2));
+          return 0;
+        };
+        return {
+          leverName: l.leverName || 'Lever',
+          intradayPct: fromPct(l.intradayPct, l.intradayBuyPct, l.intradaySellPct),
+          weekPct: fromPct(l.weekPct, l.weekBuyPct, l.weekSellPct),
+          monthPct: fromPct(l.monthPct, l.monthBuyPct, l.monthSellPct)
+        };
+      });
     }
     await doc.save();
     res.json({ success: true, lever: doc });

@@ -266,7 +266,12 @@ exports.fullAnalysis = async (stockName, action, timeframe, leversConfig, option
     ? Number(options.currentPrice)
     : null;
   const leverSummary = leversConfig && leversConfig.length
-    ? leversConfig.map((l) => `${l.leverName}: intraday buy ${l.intradayBuyPct}% sell ${l.intradaySellPct}%, week buy ${l.weekBuyPct}% sell ${l.weekSellPct}%, month buy ${l.monthBuyPct}% sell ${l.monthSellPct}%`).join('; ')
+    ? leversConfig.map((l) => {
+        const intra = l.intradayPct != null ? l.intradayPct : (l.intradayBuyPct != null ? (Number(l.intradayBuyPct) + Number(l.intradaySellPct ?? l.intradayBuyPct)) / 2 : 0);
+        const week = l.weekPct != null ? l.weekPct : (l.weekBuyPct != null ? (Number(l.weekBuyPct) + Number(l.weekSellPct ?? l.weekBuyPct)) / 2 : 0);
+        const month = l.monthPct != null ? l.monthPct : (l.monthBuyPct != null ? (Number(l.monthBuyPct) + Number(l.monthSellPct ?? l.monthBuyPct)) / 2 : 0);
+        return `${l.leverName}: intraday ${intra}%, week ${week}%, month ${month}%`;
+      }).join('; ')
     : 'No lever weights configured.';
   const fallback = {
     intradayParagraph: 'Analysis unavailable.',
