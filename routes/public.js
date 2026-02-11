@@ -632,6 +632,133 @@ router.post('/validate-ask-sandy-code', async (req, res) => {
   }
 });
 
+// ---------- Ask Sandy approval flow (referral from tabaltllp@gmail.com or rainasarita72@gmail.com) ----------
+const AskSandyPendingApproval = require('../models/AskSandyPendingApproval');
+const crypto = require('crypto');
+
+const ASK_SANDY_APPROVER_EMAILS = ['tabaltllp@gmail.com', 'rainasarita72@gmail.com'];
+
+function isAskSandyApprover(email) {
+  return ASK_SANDY_APPROVER_EMAILS.includes((email || '').toLowerCase().trim());
+}
+
+// @route   POST /api/public/ask-sandy-request-approval
+// @desc    Request approval for Ask Sandy registration; sends approval link to both approver emails via Brevo
+// @access  Public
+router.post('/ask-sandy-request-approval', async (req, res) => {
+  try {
+    const { name, email, approverEmail } = req.body;
+    const requestedEmail = (email || '').toLowerCase().trim();
+    const approver = (approverEmail || '').toLowerCase().trim();
+    if (!name || !requestedEmail || !approver) {
+      return res.status(400).json({
+        success: false,
+        message: 'Name, email, and approver email are required. Please select which email is approving you (tabaltllp@gmail.com or rainasarita72@gmail.com).'
+      });
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(requestedEmail)) {
+      return res.status(400).json({ success: false, message: 'Please enter a valid email address.' });
+    }
+    if (isAskSandyApprover(requestedEmail)) {
+      return res.status(400).json({
+        success: false,
+        message: 'If you are registering with tabaltllp@gmail.com or rainasarita72@gmail.com, you can register directly without approval.'
+      });
+    }
+    if (!ASK_SANDY_APPROVER_EMAILS.includes(approver)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please select one of the two approver emails: tabaltllp@gmail.com or rainasarita72@gmail.com.'
+      });
+    }
+
+    const existing = await AskSandyPendingApproval.findOne({ requestedEmail, approved: false }).sort({ createdAt: -1 });
+    if (existing) {
+      return res.status(400).json({
+        success: false,
+        message: 'An approval request for this email is already pending. You have not been approved yet. Reach out to the people who own these email addresses: tabaltllp@gmail.com, rainasarita72@gmail.com.'
+      });
+    }
+
+    const token = crypto.randomBytes(32).toString('hex');
+    const backendUrl = (process.env.BACKEND_URL || process.env.FRONTEND_URL || '').replace(/\/$/, '');
+    const approvalLink = backendUrl ? `${backendUrl}/api/public/ask-sandy-approve/${token}` : `${req.protocol}://${req.get('host')}/api/public/ask-sandy-approve/${token}`;
+
+    await AskSandyPendingApproval.create({
+      requestedEmail,
+      name: String(name).trim(),
+      approverEmail: approver,
+      token,
+      approved: false
+    });
+
+    const htmlContent = `
+      <p><strong>Ask Sandy – New user approval request</strong></p>
+      <p>A new user has requested access to Ask Sandy and indicated that you are approving them.</p>
+      <ul>
+        <li><strong>Name:</strong> ${String(name).trim()}</li>
+        <li><strong>Email requested:</strong> ${requestedEmail}</li>
+      </ul>
+      <p>Click the button below to approve this user. Once approved, they will be able to complete registration with the email above.</p>
+      <p><a href="${approvalLink}" style="display:inline-block;background:#2563eb;color:#fff;padding:12px 24px;text-decoration:none;border-radius:8px;font-weight:600;">Approve</a></p>
+      <p>If you did not expect this request, you can ignore this email.</p>
+      <p style="color:#666;font-size:12px;">This link is valid until used. Approving allows the user to register with the requested email.</p>
+    `;
+
+    const sent = await Promise.allSettled(
+      ASK_SANDY_APPROVER_EMAILS.map((to) => mail(to, 'Ask Sandy – Approve new user', htmlContent))
+    );
+
+    const anySent = sent.some((r) => r.status === 'fulfilled' && r.value?.success);
+    if (!anySent) {
+      const err = sent.find((r) => r.status === 'rejected' || (r.value && !r.value.success));
+      console.error('Ask Sandy approval emails failed:', err);
+      return res.status(500).json({
+        success: false,
+        message: 'We could not send the approval emails. Please try again later or contact support.'
+      });
+    }
+
+    res.json({
+      success: true,
+      pending: true,
+      message: 'We have sent an approval link to both email addresses (tabaltllp@gmail.com and rainasarita72@gmail.com). You will be able to register once one of them approves. Please come back to this page and complete registration with the same email after you receive approval.'
+    });
+  } catch (err) {
+    console.error('Ask Sandy request approval:', err);
+    res.status(500).json({
+      success: false,
+      message: err.message || 'Request approval failed.'
+    });
+  }
+});
+
+// @route   GET /api/public/ask-sandy-approve/:token
+// @desc    Approve a pending user (link clicked from email); redirects to frontend
+// @access  Public
+router.get('/ask-sandy-approve/:token', async (req, res) => {
+  const frontendUrl = (process.env.FRONTEND_URL || 'https://mainproduct.vercel.app').replace(/\/$/, '');
+  const redirectUrl = `${frontendUrl}/ask-sandy?approved=1`;
+  try {
+    const { token } = req.params;
+    if (!token) {
+      return res.redirect(`${redirectUrl}?error=missing`);
+    }
+    const pending = await AskSandyPendingApproval.findOne({ token, approved: false });
+    if (!pending) {
+      return res.redirect(`${redirectUrl}?error=invalid`);
+    }
+    pending.approved = true;
+    pending.approvedAt = new Date();
+    pending.approvedBy = null;
+    await pending.save();
+    return res.redirect(`${redirectUrl}&email=${encodeURIComponent(pending.requestedEmail)}`);
+  } catch (err) {
+    console.error('Ask Sandy approve token:', err);
+    return res.redirect(`${redirectUrl}?error=server`);
+  }
+});
+
 // @route   POST /api/public/market-research/validate
 // @desc    Validate Market Research Platform access
 // @access  Public

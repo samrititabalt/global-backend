@@ -6,12 +6,19 @@ const AskSandyPortfolio = require('../models/AskSandyPortfolio');
 const AskSandyTradeSession = require('../models/AskSandyTradeSession');
 const AskSandyLever = require('../models/AskSandyLever');
 const AskSandyInsight = require('../models/AskSandyInsight');
+const AskSandyPendingApproval = require('../models/AskSandyPendingApproval');
 const { protectAskSandy } = require('../middleware/askSandyAuth');
 const generateAskSandyToken = require('../utils/askSandyJwt');
 const askSandyService = require('../services/askSandyService');
 
+const ASK_SANDY_APPROVER_EMAILS = ['tabaltllp@gmail.com', 'rainasarita72@gmail.com'];
+
+function isAskSandyApprover(email) {
+  return ASK_SANDY_APPROVER_EMAILS.includes((email || '').toLowerCase().trim());
+}
+
 // ---------- Auth ----------
-// POST /api/ask-sandy/register
+// POST /api/ask-sandy/register (requires approval for non-approver emails)
 router.post(
   '/register',
   [
@@ -25,17 +32,60 @@ router.post(
       if (!errors.isEmpty()) {
         return res.status(400).json({ message: errors.array().map((e) => e.msg).join('. '), errors: errors.array() });
       }
-      const { name, email, password } = req.body;
-      const existing = await AskSandyUser.findOne({ email: email.toLowerCase() });
+      const { name, email, password, approverEmail } = req.body;
+      const normalizedEmail = email.toLowerCase().trim();
+
+      const existing = await AskSandyUser.findOne({ email: normalizedEmail });
       if (existing) {
         return res.status(400).json({ message: 'Email already registered.' });
       }
-      const user = await AskSandyUser.create({ name, email: email.toLowerCase(), password });
-      const token = generateAskSandyToken(user._id);
-      res.status(201).json({
-        success: true,
-        token,
-        user: { id: user._id, name: user.name, email: user.email }
+
+      if (isAskSandyApprover(normalizedEmail)) {
+        const user = await AskSandyUser.create({ name, email: normalizedEmail, password });
+        const token = generateAskSandyToken(user._id);
+        return res.status(201).json({
+          success: true,
+          token,
+          user: { id: user._id, name: user.name, email: user.email }
+        });
+      }
+
+      const approvedPending = await AskSandyPendingApproval.findOne({
+        requestedEmail: normalizedEmail,
+        approved: true,
+        used: false
+      }).sort({ approvedAt: -1 });
+
+      if (approvedPending) {
+        const user = await AskSandyUser.create({ name, email: normalizedEmail, password });
+        approvedPending.used = true;
+        await approvedPending.save();
+        const token = generateAskSandyToken(user._id);
+        return res.status(201).json({
+          success: true,
+          token,
+          user: { id: user._id, name: user.name, email: user.email }
+        });
+      }
+
+      const pendingExists = await AskSandyPendingApproval.findOne({
+        requestedEmail: normalizedEmail,
+        approved: false
+      });
+      if (pendingExists) {
+        return res.status(403).json({
+          message: 'You have not been approved by the admin team yet. Reach out to the people who own these email addresses: tabaltllp@gmail.com, rainasarita72@gmail.com.'
+        });
+      }
+
+      if (!approverEmail || !ASK_SANDY_APPROVER_EMAILS.includes((approverEmail || '').toLowerCase().trim())) {
+        return res.status(403).json({
+          message: 'To register with this email you need approval from one of the designated approvers. Please select which email is approving you (tabaltllp@gmail.com or rainasarita72@gmail.com) and submit the form. We will send an approval link to both; once one of them approves, you can complete registration here.'
+        });
+      }
+
+      return res.status(403).json({
+        message: 'Please use the form to request approval first. Select "Which email is approving you?", then submit. We will send an approval link to both approvers. After one of them approves, come back and register with the same email and password.'
       });
     } catch (err) {
       res.status(500).json({ message: 'Registration failed.', error: err.message });
