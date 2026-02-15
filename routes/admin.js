@@ -42,7 +42,11 @@ const { DEFAULT_PLANS } = require('../constants/defaultPlans');
 const { DEFAULT_MARKET_RESEARCH_DECK } = require('../data/defaultMarketResearchDeck');
 const { DEFAULT_AGENCIES_DECK } = require('../data/defaultAgenciesDeck');
 const AskSandyLever = require('../models/AskSandyLever');
+const AskSandyNews = require('../models/AskSandyNews');
+const AskSandyRating = require('../models/AskSandyRating');
+const AskSandyVerdict = require('../models/AskSandyVerdict');
 const askSandyService = require('../services/askSandyService');
+const askSandyNewsService = require('../services/askSandyNewsService');
 
 // Helper to parse JSON with fallback (used for AI deck edits)
 const parseJsonWithFallback = (text) => {
@@ -738,17 +742,11 @@ router.get('/ask-sandy-levers', protect, authorize('admin'), async (req, res) =>
 });
 
 // @route   POST /api/admin/ask-sandy-levers/seed-nifty50
-// @desc    Seed Nifty 50 stocks with placeholder lever structure (via GPT)
+// @desc    Seed Nifty 50 stocks (for news-based ratings; no levers)
 // @access  Private (Admin)
 router.post('/ask-sandy-levers/seed-nifty50', protect, authorize('admin'), async (req, res) => {
   try {
     const stocks = await askSandyService.getNifty50List();
-    const placeholderLever = [
-      { leverName: 'Global Market Sentiment', intradayPct: 25, weekPct: 25, monthPct: 25 },
-      { leverName: 'Company Fundamentals', intradayPct: 25, weekPct: 25, monthPct: 25 },
-      { leverName: 'News & Sentiment', intradayPct: 25, weekPct: 25, monthPct: 25 },
-      { leverName: 'Technical Analysis', intradayPct: 25, weekPct: 25, monthPct: 25 }
-    ];
     let created = 0;
     for (const s of stocks) {
       const symbol = (s.symbol || s.name || '').trim();
@@ -758,7 +756,7 @@ router.post('/ask-sandy-levers/seed-nifty50', protect, authorize('admin'), async
         await AskSandyLever.create({
           stockSymbol: symbol,
           stockName: (s.name || symbol).trim(),
-          levers: placeholderLever.map((l) => ({ ...l }))
+          levers: []
         });
         created++;
       }
@@ -811,6 +809,137 @@ router.put('/ask-sandy-levers/:symbol', protect, authorize('admin'), async (req,
     }
     await doc.save();
     res.json({ success: true, lever: doc });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// ========== ASK SANDY — NEWS DASHBOARD (pure news-driven) ==========
+const { NEWS_CATEGORIES } = require('../models/AskSandyNews');
+
+// @route   GET /api/admin/ask-sandy-news
+// @desc    List news for a month (query: month, year); grouped by category
+// @access  Private (Admin)
+router.get('/ask-sandy-news', protect, authorize('admin'), async (req, res) => {
+  try {
+    const year = parseInt(req.query.year, 10) || new Date().getFullYear();
+    const month = parseInt(req.query.month, 10) || new Date().getMonth() + 1;
+    const list = await AskSandyNews.find({ year, month }).sort({ category: 1, createdAt: -1 }).lean();
+    const byCategory = {};
+    NEWS_CATEGORIES.forEach((c) => { byCategory[c] = []; });
+    list.forEach((n) => {
+      if (byCategory[n.category]) byCategory[n.category].push(n);
+    });
+    res.json({ success: true, news: list, byCategory, year, month });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   POST /api/admin/ask-sandy-news
+// @desc    Add a news item
+// @access  Private (Admin)
+router.post('/ask-sandy-news', protect, authorize('admin'), [
+  body('category').isIn(NEWS_CATEGORIES).withMessage('Invalid category'),
+  body('headline').trim().notEmpty().withMessage('Headline required')
+], async (req, res) => {
+  try {
+    const err = validationResult(req);
+    if (!err.isEmpty()) return res.status(400).json({ message: err.array().map((e) => e.msg).join('. ') });
+    const year = parseInt(req.body.year, 10) || new Date().getFullYear();
+    const month = parseInt(req.body.month, 10) || new Date().getMonth() + 1;
+    const doc = await AskSandyNews.create({
+      category: req.body.category,
+      headline: req.body.headline.trim(),
+      summary: (req.body.summary || '').trim(),
+      sourceLink: (req.body.sourceLink || '').trim(),
+      manualRating: req.body.manualRating != null ? Math.max(1, Math.min(10, parseInt(req.body.manualRating, 10))) : null,
+      sectorTag: req.body.sectorTag ? req.body.sectorTag.trim() : null,
+      stockTag: req.body.stockTag ? req.body.stockTag.trim() : null,
+      assetTag: req.body.assetTag ? req.body.assetTag.trim() : null,
+      year,
+      month
+    });
+    res.status(201).json({ success: true, news: doc });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   PATCH /api/admin/ask-sandy-news/:id
+// @desc    Edit a news item
+// @access  Private (Admin)
+router.patch('/ask-sandy-news/:id', protect, authorize('admin'), async (req, res) => {
+  try {
+    const doc = await AskSandyNews.findById(req.params.id);
+    if (!doc) return res.status(404).json({ message: 'News not found.' });
+    if (req.body.headline != null) doc.headline = String(req.body.headline).trim();
+    if (req.body.summary != null) doc.summary = String(req.body.summary).trim();
+    if (req.body.sourceLink != null) doc.sourceLink = String(req.body.sourceLink).trim();
+    if (req.body.category != null && NEWS_CATEGORIES.includes(req.body.category)) doc.category = req.body.category;
+    if (req.body.manualRating != null) doc.manualRating = Math.max(1, Math.min(10, parseInt(req.body.manualRating, 10)));
+    if (req.body.sectorTag != null) doc.sectorTag = req.body.sectorTag ? String(req.body.sectorTag).trim() : null;
+    if (req.body.stockTag != null) doc.stockTag = req.body.stockTag ? String(req.body.stockTag).trim() : null;
+    if (req.body.assetTag != null) doc.assetTag = req.body.assetTag ? String(req.body.assetTag).trim() : null;
+    await doc.save();
+    res.json({ success: true, news: doc });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   DELETE /api/admin/ask-sandy-news/:id
+// @desc    Remove a news item
+// @access  Private (Admin)
+router.delete('/ask-sandy-news/:id', protect, authorize('admin'), async (req, res) => {
+  try {
+    const doc = await AskSandyNews.findByIdAndDelete(req.params.id);
+    if (!doc) return res.status(404).json({ message: 'News not found.' });
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   POST /api/admin/ask-sandy-news/:id/rate
+// @desc    Trigger AI rating (1-10) for one news item
+// @access  Private (Admin)
+router.post('/ask-sandy-news/:id/rate', protect, authorize('admin'), async (req, res) => {
+  try {
+    const rating = await askSandyNewsService.rateNewsItem(req.params.id);
+    if (rating == null) return res.status(500).json({ message: 'Rating failed.' });
+    const news = await AskSandyNews.findById(req.params.id).lean();
+    res.json({ success: true, rating, news });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   POST /api/admin/ask-sandy-news/rate-daily
+// @desc    Compute daily ratings for all sectors/stocks/commodities/currencies from news
+// @access  Private (Admin)
+router.post('/ask-sandy-news/rate-daily', protect, authorize('admin'), async (req, res) => {
+  try {
+    const year = parseInt(req.body.year, 10) || new Date().getFullYear();
+    const month = parseInt(req.body.month, 10) || new Date().getMonth() + 1;
+    const result = await askSandyNewsService.computeDailyRatings(year, month);
+    if (!result.ok) return res.status(500).json({ message: result.message || result.error || 'Failed.' });
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   POST /api/admin/ask-sandy-news/verdict-monthly
+// @desc    Compute monthly verdicts (Strong Buy → Strong Sell) for all entities
+// @access  Private (Admin)
+router.post('/ask-sandy-news/verdict-monthly', protect, authorize('admin'), async (req, res) => {
+  try {
+    const year = parseInt(req.body.year, 10) || new Date().getFullYear();
+    const month = parseInt(req.body.month, 10) || new Date().getMonth() + 1;
+    const result = await askSandyNewsService.computeMonthlyVerdicts(year, month);
+    if (!result.ok) return res.status(500).json({ message: result.message || result.error || 'Failed.' });
+    res.json({ success: true });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
   }

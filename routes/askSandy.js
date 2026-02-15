@@ -10,6 +10,7 @@ const AskSandyPendingApproval = require('../models/AskSandyPendingApproval');
 const { protectAskSandy } = require('../middleware/askSandyAuth');
 const generateAskSandyToken = require('../utils/askSandyJwt');
 const askSandyService = require('../services/askSandyService');
+const askSandyNewsService = require('../services/askSandyNewsService');
 
 const ASK_SANDY_APPROVER_EMAILS = ['tabaltllp@gmail.com', 'rainasarita72@gmail.com'];
 
@@ -379,6 +380,72 @@ router.get('/levers/:stockSymbol', protectAskSandy, async (req, res) => {
     res.json({ success: true, levers: doc || null });
   } catch (err) {
     res.status(500).json({ success: false, levers: null });
+  }
+});
+
+// GET /api/ask-sandy/rating-verdict/:stockSymbol — news-based rating (1-10), verdict, explanation for user dashboard
+router.get('/rating-verdict/:stockSymbol', protectAskSandy, async (req, res) => {
+  try {
+    const leverDoc = await AskSandyLever.findOne({
+      $or: [
+        { stockSymbol: req.params.stockSymbol },
+        { stockName: new RegExp(req.params.stockSymbol, 'i') }
+      ]
+    });
+    const symbol = leverDoc?.stockSymbol || req.params.stockSymbol;
+    let currentPrice = null;
+    const holding = await AskSandyPortfolio.findOne({
+      userId: req.askSandyUser._id,
+      $or: [
+        { symbol: new RegExp(req.params.stockSymbol, 'i') },
+        { stockName: new RegExp(req.params.stockSymbol, 'i') }
+      ]
+    });
+    if (holding && holding.currentPrice != null) currentPrice = Number(holding.currentPrice);
+    const result = await askSandyNewsService.getRatingAndVerdictForEntity('stock', symbol, currentPrice);
+    res.json({ success: true, ...result });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err?.message });
+  }
+});
+
+// GET /api/ask-sandy/news-strategy/:stockSymbol — entry/exit/stop/take-profit from news only (short-term 1-3 months)
+router.get('/news-strategy/:stockSymbol', protectAskSandy, async (req, res) => {
+  try {
+    let currentPrice = null;
+    const holding = await AskSandyPortfolio.findOne({
+      userId: req.askSandyUser._id,
+      $or: [
+        { symbol: new RegExp(req.params.stockSymbol, 'i') },
+        { stockName: new RegExp(req.params.stockSymbol, 'i') }
+      ]
+    });
+    if (holding && holding.currentPrice != null) currentPrice = Number(holding.currentPrice);
+    const stockName = holding?.stockName || req.params.stockSymbol;
+    const result = await askSandyNewsService.getNewsBasedStrategy(stockName, currentPrice);
+    res.json({ success: true, ...result });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err?.message });
+  }
+});
+
+// POST /api/ask-sandy/question-rating — user challenges/news-questions the rating; GPT responds and defends
+router.post('/question-rating', protectAskSandy, async (req, res) => {
+  try {
+    const { stockName, rating, verdict, explanation, userQuestion } = req.body;
+    if (!stockName || !userQuestion || typeof userQuestion !== 'string' || userQuestion.trim() === '') {
+      return res.status(400).json({ message: 'stockName and userQuestion (non-empty string) required.' });
+    }
+    const result = await askSandyNewsService.challengeRating(
+      String(stockName).trim(),
+      rating != null ? Number(rating) : null,
+      verdict != null ? String(verdict) : null,
+      explanation != null ? String(explanation) : null,
+      userQuestion.trim()
+    );
+    res.json({ success: true, explanation: result.explanation });
+  } catch (err) {
+    res.status(500).json({ message: 'Challenge failed.', error: err?.message });
   }
 });
 
