@@ -17,12 +17,18 @@ const server = http.createServer(app);
 server.timeout = 300000; // 5 minutes timeout for large uploads (200MB)
 server.keepAliveTimeout = 300000; // Keep connections alive for large uploads
 server.headersTimeout = 300000; // Headers timeout for large uploads
+const envOrigins = (process.env.CORS_ORIGINS || '')
+  .split(',')
+  .map((o) => o.trim())
+  .filter(Boolean);
 const allowedOrigins = [
   process.env.FRONTEND_URL || 'https://mainproduct.vercel.app',
   'https://mainproduct.vercel.app',
   'https://www.samstudios.uk',
+  'https://samstudios.uk',
   'http://localhost:5173',
-  'http://localhost:3000'
+  'http://localhost:3000',
+  ...envOrigins
 ];
 
 const corsOptions = {
