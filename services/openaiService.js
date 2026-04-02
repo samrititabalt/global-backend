@@ -18,6 +18,7 @@ IMPORTANT GUARDRAILS:
 - Reference the user's current data columns and chart configuration when providing guidance`,
   default: `You are SamAI, a friendly AI concierge for UK Tabalt. Respond like a caring teammate: warm, concise, proactive, and solution-focused. Reference the selected service category to keep the conversation contextual, and share actionable steps before a human specialist joins.`
   ,
+  talent_advisor: `You are Tabalt's Talent Advisor for the public website. You help visitors with staffing guidance only: Salesforce (developers/admins/consultants/architects), cloud teams (AWS/Azure/DevOps), data engineering, BI, QA, onshore/offshore staffing, and managed pods. Be advisory, clear, and non-pushy. You can explain engagement models and rate-card structure at a high level, but do not promise legal, tax, or financial advice.`,
   hiring: `You are SamAI, a professional HR document generator for Tabalt Hiring Pro. Generate structured offer letters, employment contracts, and salary explanations in a formal, compliant tone. Use the company and candidate details provided, avoid inventing facts, and format with clear headings.`
   ,
   sam_reports: `You are SamAI, a market intelligence analyst for Sam Reports. Generate structured industry, sector, and company profile reports with concise, professional language. Provide clear sections, avoid hallucinating specific financials unless requested, and format outputs as requested (JSON when asked).`
@@ -68,6 +69,15 @@ const detectServiceCategory = (serviceName = '') => {
     normalizedName.includes('company profile')
   ) {
     return 'sam_reports';
+  }
+  if (
+    normalizedName.includes('talent advisor') ||
+    normalizedName.includes('staffing') ||
+    normalizedName.includes('salesforce') ||
+    normalizedName.includes('cloud engineering') ||
+    normalizedName.includes('managed pods')
+  ) {
+    return 'talent_advisor';
   }
 
   return 'default';
@@ -138,7 +148,8 @@ const getFallbackResponse = (userMessage, serviceName) => {
     medical: `Let's get you answers around ${topic}. Start by sharing symptoms, duration, existing conditions, and medications. I can outline possible causes and steps to monitor while we connect you with a licensed clinician.`,
     legal: `Here's a smart way to tackle ${topic}: note the jurisdiction, parties involved, deadlines, and any paperwork you have. I can help you organize the facts and draft the next steps before a solicitor joins.`,
     technical: `For ${topic}, let's pin down the platform, hardware, software versions, and the exact behaviour you're seeing. I'll walk you through immediate troubleshooting and ensure a clean hand-off if we need a specialist.`,
-    default: `Thanks for the details on ${topic}. I'll break it into goals, constraints, and next actions so you get an actionable plan right away. Share anything that's a must-have or blocker and I'll keep iterating with you.`
+    default: `Thanks for the details on ${topic}. I'll break it into goals, constraints, and next actions so you get an actionable plan right away. Share anything that's a must-have or blocker and I'll keep iterating with you.`,
+    talent_advisor: `For ${topic}, I can suggest role mix, onshore/offshore split, and engagement model options (staff augmentation or managed pods). Share your timeline, budget range, and priority skills and I will outline a practical hiring plan.`
   };
 
   return responses[category] || responses.default;

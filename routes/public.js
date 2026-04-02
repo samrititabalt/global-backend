@@ -70,24 +70,14 @@ router.post('/chatbot-message', async (req, res) => {
       formattedHistory = []; // Use empty history if formatting fails
     }
 
-    // Detect if this is a chart builder request
-    const isChartBuilderRequest = message.toLowerCase().includes('chart') || 
-                                  message.toLowerCase().includes('smart reports') ||
-                                  message.toLowerCase().includes('dashboard') ||
-                                  message.toLowerCase().includes('data visualization') ||
-                                  message.toLowerCase().includes('ppt') ||
-                                  message.toLowerCase().includes('powerpoint') ||
-                                  chatHistory.some(msg => msg.content?.toLowerCase().includes('chart') || 
-                                                   msg.content?.toLowerCase().includes('smart reports'));
-
-    // Use GPT-4 Mini for responses - this will return a fallback if API key is missing/invalid
+    // Public site chatbot: talent advisor role (do not affect internal tools)
     let aiResponse;
     try {
-      console.log('Calling generateAIResponse...', { isChartBuilderRequest });
+      console.log('Calling generateAIResponse...', { role: 'talent_advisor' });
       aiResponse = await generateAIResponse(
         message.trim(),
         formattedHistory,
-        isChartBuilderRequest ? 'chart_builder' : 'default' // Use chart_builder prompt for chart-related requests
+        'talent_advisor'
       );
       console.log('AI response received, length:', aiResponse?.length);
     } catch (aiError) {
@@ -101,13 +91,13 @@ router.post('/chatbot-message', async (req, res) => {
       });
       // Use a helpful fallback message if AI generation fails
       const messagePreview = message.substring(0, 50);
-      aiResponse = `Thanks for your message about "${messagePreview}${message.length > 50 ? '...' : ''}". I'm here to help you with Sam's Smart Reports Pro. How can I assist you with building charts, formatting data, or customizing your dashboard?`;
+      aiResponse = `Thanks for your message about "${messagePreview}${message.length > 50 ? '...' : ''}". I can help with Salesforce, cloud, data, BI hiring plans, engagement models, and team structure guidance.`;
     }
 
     // Ensure we have a response
     if (!aiResponse || typeof aiResponse !== 'string') {
       console.warn('AI response is invalid, using fallback');
-      aiResponse = `I'm here to help you with Sam's Smart Reports Pro. How can I assist you with building charts, formatting data, or customizing your dashboard?`;
+      aiResponse = `I can help with staffing guidance across Salesforce, cloud engineering, data, BI, and managed team models.`;
     }
 
     // Track chatbot interaction activity (completely non-blocking - use setTimeout to defer)
@@ -291,6 +281,45 @@ router.post('/send-contact-info', async (req, res) => {
       message: 'Unable to process contact information at this time.',
       error: error.message,
     });
+  }
+});
+
+// @route   POST /api/public/contact-inquiry
+// @desc    Save public contact inquiry to MongoDB
+// @access  Public
+router.post('/contact-inquiry', async (req, res) => {
+  try {
+    const { name, company, email, phone, hiringRoles, message } = req.body || {};
+    if (!name || !company || !email || !hiringRoles || !message) {
+      return res.status(400).json({ success: false, message: 'name, company, email, hiringRoles and message are required.' });
+    }
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(String(email).trim())) {
+      return res.status(400).json({ success: false, message: 'Invalid email format.' });
+    }
+
+    await Lead.create({
+      visitorName: String(name).trim(),
+      companyName: String(company).trim(),
+      email: String(email).trim().toLowerCase(),
+      phoneNumber: phone ? String(phone).trim() : null,
+      source: 'Website',
+      status: 'Lead',
+      summary: `Roles hiring for: ${String(hiringRoles).trim()}`,
+      notes: String(message).trim(),
+      pageUrl: '/contact-us',
+      dateCaptured: new Date()
+    });
+
+    Activity.create({
+      type: 'contact_form_submission',
+      description: `Contact inquiry submitted by ${String(name).trim()} (${String(email).trim().toLowerCase()})`,
+      metadata: { company: String(company).trim(), hiringRoles: String(hiringRoles).trim() }
+    }).catch(() => {});
+
+    res.status(201).json({ success: true, message: 'Inquiry submitted.' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Failed to submit inquiry.', error: error.message });
   }
 });
 
