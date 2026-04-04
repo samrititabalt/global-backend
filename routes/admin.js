@@ -562,22 +562,21 @@ router.post('/first-call-deck-agencies/ai-edit', protect, authorize('admin'), as
     }
 
     const prompt = `
-You are editing the "First-Call Deck To Agencies" — aimed at market research agencies. Keep the same slide structure and layout types.
-Return JSON only with this shape:
+You are editing the "First-Call Deck To Agencies" for Tabalt Ltd (staffing / agency partners). Keep the same slide structure and layout types.
+
+Return a single JSON object with this exact shape:
 {
   "summary": "Short summary of edits",
-  "slides": [ ...updatedSlides ]
+  "slides": [ /* every slide, see below */ ]
 }
 
-Rules:
-- Preserve slide layout by keeping each slide "type".
-- You may edit text, images, and lists.
-- You may add or remove slides, but each slide must include a valid "type".
-- Allowed types: agenda, companyProfile, portfolioGrid, askSamOverview, howWorks, caseStudies, serviceOptions, whyChoose, executivePage1, executivePage2.
-- Keep content focused on agencies: we understand they have other partners; we want a small opportunity to test us and build trust; we can come to their office.
-- Tone: professional, consultative, no pressure. Big 4–style clarity.
-- If a slide has an "icon" field (emoji), keep or set an appropriate icon for the header.
-- If you only update one slide, still return that slide with its id.
+Critical rules:
+- You MUST include every slide from the input in "slides", in the same order, each with the SAME numeric "id" and same "type" as the input (unless the instruction explicitly requires a type change).
+- Apply the user's instruction to all slides that need changes. Do not omit slides from the array.
+- Preserve each slide's "type" field. Allowed types: agenda, companyProfile, portfolioGrid, askSamOverview, howWorks, caseStudies, serviceOptions, whyChoose, executivePage1, executivePage2.
+- For executivePage1 / executivePage2: keep all expected fields populated (strings, arrays, objects). If the user asks for images beside content, add optional fields "layout": "split" and "heroImage": { "url": "https://...", "alt": "...", "caption": "..." } and keep text in existing fields — the UI can be extended later; still return valid JSON with full slide objects.
+- For any slide type that supports "image" or visual fields, you may set image URLs to relevant https: URLs (e.g. Unsplash) when the user asks for imagery.
+- Tone: professional, consultative. No markdown outside the JSON.
 
 Current slides JSON:
 ${JSON.stringify(slides)}
@@ -586,9 +585,12 @@ Instruction:
 ${instruction}
 `;
 
-    const aiResponse = await generateAIResponse(prompt, [], 'general');
-    if (!aiResponse || typeof aiResponse !== 'string') {
-      return res.status(502).json({ message: 'AI response was empty. Please try again.' });
+    const aiResult = await generateDeckJsonFromPrompt(prompt);
+    const aiResponse = aiResult?.content;
+    if (!aiResponse) {
+      return res.status(502).json({
+        message: aiResult?.error || 'AI response was empty. Please try again.'
+      });
     }
     const parsed = parseJsonWithFallback(aiResponse);
     const parsedSlides = Array.isArray(parsed?.slides)
@@ -769,9 +771,14 @@ ${tabaltContext}
 Use UK English. Client-specific throughout; no generic filler.`;
     }
 
-    const aiRaw = await generateDeckJsonFromPrompt(userPrompt);
+    const aiResult = await generateDeckJsonFromPrompt(userPrompt);
+    const aiRaw = aiResult?.content;
     if (!aiRaw) {
-      return res.status(502).json({ message: 'AI returned no output. Check OPENAI_API_KEY and try again.' });
+      return res.status(502).json({
+        message:
+          aiResult?.error ||
+          'AI returned no output. Check Render logs, OPENAI_API_KEY, OPENAI_MODEL, and OPENAI_DECK_MAX_TOKENS (must be > 0).'
+      });
     }
     const parsed = parseJsonWithFallback(aiRaw);
     if (parsed?.error) {

@@ -118,9 +118,37 @@ const buildChatMessages = (systemPrompt, chatHistory = [], userMessage) => {
 };
 
 const numberFromEnv = (value, fallback) => {
-  if (value === undefined) return fallback;
-  const parsed = Number(value);
+  if (value === undefined || value === null) return fallback;
+  const trimmed = String(value).trim();
+  if (trimmed === '') return fallback;
+  const parsed = Number(trimmed);
   return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+/** Positive integer for max_tokens-style limits (avoids empty string env → 0 tokens). */
+const positiveIntFromEnv = (value, fallback, min = 1) => {
+  const n = numberFromEnv(value, fallback);
+  if (!Number.isFinite(n) || n < min) return fallback;
+  return Math.floor(n);
+};
+
+const normalizeAssistantText = (content) => {
+  if (content == null) return '';
+  if (typeof content === 'string') return content.trim();
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => {
+        if (typeof part === 'string') return part;
+        if (part && typeof part === 'object') {
+          if (part.type === 'text' && part.text) return part.text;
+          if (part.text) return part.text;
+        }
+        return '';
+      })
+      .join('')
+      .trim();
+  }
+  return String(content).trim();
 };
 
 let openAIClient = null;
@@ -533,30 +561,72 @@ const generateRequestFlowResponse = async (messages = []) => {
 
 /**
  * Long-form JSON generation for deck builders (uses same model as chat: gpt-4o-mini by default).
+ * @returns {{ content: string|null, error: string|null, finishReason?: string }}
  */
 const generateDeckJsonFromPrompt = async (userPrompt) => {
+  const key = process.env.OPENAI_API_KEY;
+  if (!key || !String(key).trim()) {
+    return { content: null, error: 'OPENAI_API_KEY is not set on the server.' };
+  }
   const client = getOpenAIClient();
   if (!client) {
-    return null;
+    return { content: null, error: 'OpenAI client could not be initialised (check OPENAI_API_KEY).' };
   }
+  const model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+  const maxTokens = positiveIntFromEnv(process.env.OPENAI_DECK_MAX_TOKENS, 12000, 512);
+  const useJsonObject =
+    String(process.env.OPENAI_DECK_JSON_MODE || 'true').toLowerCase() !== 'false' &&
+    !/^(gpt-3\.5|davinci)/i.test(model);
+
   try {
-    const completion = await client.chat.completions.create({
-      model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+    const body = {
+      model,
       messages: [
         {
           role: 'system',
           content:
-            'You are a document engine for Tabalt Ltd. Reply with ONLY valid JSON (no markdown code fences, no explanation before or after). If you cannot comply, return {"error":"reason"}.'
+            'You are a document engine for Tabalt Ltd. You must reply with a single valid JSON object only (no markdown fences, no text before or after). If you cannot comply, return {"error":"brief reason"}.'
         },
-        { role: 'user', content: userPrompt }
+        {
+          role: 'user',
+          content: `${userPrompt}\n\nRespond with one JSON object only, matching the requested schema.`
+        }
       ],
       temperature: numberFromEnv(process.env.OPENAI_DECK_TEMPERATURE, 0.35),
-      max_tokens: numberFromEnv(process.env.OPENAI_DECK_MAX_TOKENS, 12000)
-    });
-    return (completion.choices?.[0]?.message?.content || '').trim();
+      max_tokens: maxTokens
+    };
+    if (useJsonObject) {
+      body.response_format = { type: 'json_object' };
+    }
+
+    const completion = await client.chat.completions.create(body);
+    const choice = completion.choices?.[0];
+    const finishReason = choice?.finish_reason;
+    const raw = normalizeAssistantText(choice?.message?.content);
+
+    if (!raw) {
+      const detail = finishReason ? `finish_reason=${finishReason}` : 'no choice content';
+      console.error('generateDeckJsonFromPrompt empty content', { detail, model, maxTokens });
+      return {
+        content: null,
+        error: `OpenAI returned an empty response (${detail}). If using a custom OPENAI_BASE_URL or model, try OPENAI_MODEL=gpt-4o-mini or set OPENAI_DECK_JSON_MODE=false.`,
+        finishReason
+      };
+    }
+
+    if (finishReason === 'length') {
+      console.warn('generateDeckJsonFromPrompt: response may be truncated (length)');
+    }
+
+    return { content: raw, error: null, finishReason };
   } catch (error) {
-    console.error('generateDeckJsonFromPrompt error:', error?.message);
-    return null;
+    const msg = error?.message || 'OpenAI request failed';
+    const status = error?.status || error?.response?.status;
+    console.error('generateDeckJsonFromPrompt error:', msg, status, error?.code);
+    return {
+      content: null,
+      error: status ? `${msg} (HTTP ${status})` : msg
+    };
   }
 };
 
