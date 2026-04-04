@@ -1,21 +1,37 @@
 const { DEFAULT_AGENCIES_DECK } = require('../data/defaultAgenciesDeck');
 
+const DEFAULT_CONSULTING_FIRM_LOGOS = [
+  {
+    url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/2/23/BCG_Corporate_Logo.svg/200px-BCG_Corporate_Logo.svg.png',
+    alt: 'Boston Consulting Group'
+  },
+  {
+    url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/5/5a/Bain_and_Company_logo.svg/200px-Bain_and_Company_logo.svg.png',
+    alt: 'Bain & Company'
+  },
+  {
+    url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/1/1d/McKinsey_%26_Company_logo.svg/200px-McKinsey_%26_Company_logo.svg.png',
+    alt: 'McKinsey & Company'
+  }
+];
+
 const DEFAULT_EXEC_1 = {
   type: 'executivePage1',
   icon: '📌',
-  title: 'Tabalt Ltd — Who We Are',
+  title: 'SamStudios — Who We Are',
   tagline: 'Adaptive talent for cloud, data, engineering & AI',
   whoWeAre:
-    'Tabalt Ltd provides adaptive talent solutions for cloud, data, engineering, and AI — combining UK onshore and India offshore delivery.',
+    'SamStudios provides adaptive talent for cloud, data, engineering, and AI — combining UK onshore and India offshore delivery. SamStudios is part of Tabalt Ltd.',
   credibilityBlock:
-    'Trusted by firms operating at the same quality bar as BCG, Bain & Company, and McKinsey & Company.',
-  consultingFirms: ['BCG', 'Bain & Company', 'McKinsey & Company'],
+    'Trusted delivery alongside leading global strategy firms — operating at the highest bar for quality and governance.',
+  consultingFirms: [],
+  consultingFirmLogos: DEFAULT_CONSULTING_FIRM_LOGOS,
   differentiators: [
     { title: 'Adaptive talent', text: 'Human expertise that evolves as technology changes.' },
     { title: 'Value-based pricing', text: 'Align fees to outcomes where agreed.' }
   ],
   extraDifferentiators: [{ title: 'Coordinator included', text: 'Dedicated project coordination at no extra cost.' }],
-  servicesColumn1Title: 'Staff augmentation (Tabalt payroll)',
+  servicesColumn1Title: 'Staff augmentation (Tabalt Ltd payroll)',
   servicesColumn1Bullets: ['UK + India delivery', 'Pre-trained talent', 'Fast replacement'],
   servicesColumn2Title: 'Recruitment (direct hire)',
   servicesColumn2Bullets: ['One-time fee options', 'Flexible commercial terms']
@@ -79,6 +95,20 @@ function ensureStringArray(v, fallback) {
   return [...fallback];
 }
 
+function ensureConsultingFirmLogos(v, fallback) {
+  if (Array.isArray(v) && v.length) {
+    const out = v
+      .map((x, i) =>
+        typeof x === 'string'
+          ? { url: x, alt: `Firm ${i + 1}` }
+          : { url: x?.url || '', alt: x?.alt || '' }
+      )
+      .filter((x) => x.url);
+    if (out.length) return out;
+  }
+  return fallback.map((x) => ({ ...x }));
+}
+
 function mergeCards(aiCards, templateCards) {
   const t = templateCards || [];
   if (!Array.isArray(aiCards) || !aiCards.length) return t;
@@ -117,6 +147,7 @@ function normalizeAgenciesSlides(slides) {
       t.whoWeAre = !isEmpty(base.whoWeAre) ? base.whoWeAre : DEFAULT_EXEC_1.whoWeAre;
       t.credibilityBlock = !isEmpty(base.credibilityBlock) ? base.credibilityBlock : DEFAULT_EXEC_1.credibilityBlock;
       t.consultingFirms = ensureStringArray(base.consultingFirms, DEFAULT_EXEC_1.consultingFirms);
+      t.consultingFirmLogos = ensureConsultingFirmLogos(base.consultingFirmLogos, DEFAULT_CONSULTING_FIRM_LOGOS);
       t.differentiators = mergeDifferentiators(base.differentiators, DEFAULT_EXEC_1.differentiators);
       t.extraDifferentiators = mergeDifferentiators(base.extraDifferentiators, DEFAULT_EXEC_1.extraDifferentiators);
       t.servicesColumn1Bullets = ensureStringArray(base.servicesColumn1Bullets, DEFAULT_EXEC_1.servicesColumn1Bullets);

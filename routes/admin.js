@@ -876,7 +876,7 @@ ${jobDescriptions ? `- Job description(s) to reflect in talent mapping, skills a
 
     let userPrompt;
     if (outputFormat === 'executive') {
-      userPrompt = `Generate a 2-page executive flier for Tabalt Ltd as JSON ONLY:
+      userPrompt = `Generate a 2-page executive flier for SamStudios (part of Tabalt Ltd) as JSON ONLY:
 {
   "summary": "one line",
   "slides": [
@@ -884,13 +884,17 @@ ${jobDescriptions ? `- Job description(s) to reflect in talent mapping, skills a
       "id": 1,
       "type": "executivePage1",
       "icon": "📌",
-      "title": "Tabalt Ltd — Who We Are",
+      "title": "SamStudios — Who We Are",
       "tagline": "Adaptive talent for cloud, data, engineering & AI",
-      "whoWeAre": "2-3 sentences",
+      "whoWeAre": "2-3 sentences; mention SamStudios as primary brand and once that SamStudios is part of Tabalt Ltd",
       "differentiators": [ { "title": "Short label", "text": "One crisp sentence each — cover themes A–I above across items" } ],
-      "credibilityBlock": "Sentence naming BCG, Bain, McKinsey and trust at the highest bar",
-      "consultingFirms": [ "BCG", "Bain & Company", "McKinsey & Company" ],
-      "servicesColumn1Title": "Staff augmentation (Tabalt payroll)",
+      "credibilityBlock": "One sentence on operating at the quality bar of top-tier global strategy firms — do not name specific firms (logos render separately in the UI).",
+      "consultingFirmLogos": [
+        { "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/2/23/BCG_Corporate_Logo.svg/200px-BCG_Corporate_Logo.svg.png", "alt": "Boston Consulting Group" },
+        { "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/5/5a/Bain_and_Company_logo.svg/200px-Bain_and_Company_logo.svg.png", "alt": "Bain & Company" },
+        { "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/1/1d/McKinsey_%26_Company_logo.svg/200px-McKinsey_%26_Company_logo.svg.png", "alt": "McKinsey & Company" }
+      ],
+      "servicesColumn1Title": "Staff augmentation (Tabalt Ltd payroll)",
       "servicesColumn1Bullets": ["bullet", "..."],
       "servicesColumn2Title": "Recruitment (direct hire)",
       "servicesColumn2Bullets": ["bullet", "..."],
@@ -906,7 +910,7 @@ ${jobDescriptions ? `- Job description(s) to reflect in talent mapping, skills a
       "tagline": "${industry} — ${category}",
       "clientName": "${clientName}",
       "clientUrl": "${clientUrl}",
-      "rolesNarrative": "Paragraph tying ${roleDescription} to how Tabalt sources and deploys talent",
+      "rolesNarrative": "Paragraph tying ${roleDescription} to how SamStudios sources and deploys talent",
       "jdHighlights": ${jobDescriptions ? '["3-5 bullets distilled from JDs"]' : '[]'},
       "talentMapping": "Short paragraph",
       "skillsAlignment": "Short paragraph",
