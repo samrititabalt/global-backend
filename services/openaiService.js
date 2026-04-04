@@ -630,9 +630,72 @@ const generateDeckJsonFromPrompt = async (userPrompt) => {
   }
 };
 
+/**
+ * Deck AI edit with optional screenshots (vision) + long JSON output.
+ */
+const generateAgenciesDeckEditWithContext = async ({
+  instruction,
+  slidesJson,
+  imageDataUrls = [],
+  documentText = ''
+}) => {
+  const key = process.env.OPENAI_API_KEY;
+  if (!key || !String(key).trim()) {
+    return { content: null, error: 'OPENAI_API_KEY is not set on the server.' };
+  }
+  const client = getOpenAIClient();
+  if (!client) {
+    return { content: null, error: 'OpenAI client could not be initialised.' };
+  }
+  const model = process.env.OPENAI_VISION_MODEL || process.env.OPENAI_MODEL || 'gpt-4o-mini';
+  const maxTokens = positiveIntFromEnv(process.env.OPENAI_DECK_MAX_TOKENS, 12000, 512);
+
+  const textBlock = `Instruction:\n${instruction}\n\nCurrent slides JSON:\n${String(slidesJson).slice(0, 22000)}${
+    documentText
+      ? `\n\n---\nExtracted text from uploaded documents (may be partial):\n${String(documentText).slice(0, 14000)}`
+      : ''
+  }\n\nReturn JSON only: { "summary": string, "slides": [ full updated slides, same ids/types, all required fields per type ] }`;
+
+  const userContent = [{ type: 'text', text: textBlock }];
+  for (const url of imageDataUrls.slice(0, 8)) {
+    if (url && typeof url === 'string') {
+      userContent.push({ type: 'image_url', image_url: { url, detail: 'high' } });
+    }
+  }
+
+  try {
+    const body = {
+      model,
+      messages: [
+        {
+          role: 'system',
+          content:
+            'You edit Tabalt "First-Call Deck To Agencies" slides. Reply with ONE JSON object only: { "summary": string, "slides": array }. Each slide must keep valid "type" (agenda, companyProfile, portfolioGrid, askSamOverview, howWorks, caseStudies, serviceOptions, whyChoose, executivePage1, executivePage2). Include every slide from the input with the same ids; fill all fields so nothing renders blank. You may set image.url or heroImage.url to relevant https image URLs (e.g. Unsplash). No markdown.'
+        },
+        { role: 'user', content: userContent }
+      ],
+      temperature: numberFromEnv(process.env.OPENAI_DECK_TEMPERATURE, 0.35),
+      max_tokens: maxTokens
+    };
+    if (String(process.env.OPENAI_DECK_JSON_MODE || 'true').toLowerCase() !== 'false') {
+      body.response_format = { type: 'json_object' };
+    }
+
+    const completion = await client.chat.completions.create(body);
+    const raw = normalizeAssistantText(completion.choices?.[0]?.message?.content);
+    if (!raw) {
+      return { content: null, error: 'OpenAI returned empty content for deck edit with context.' };
+    }
+    return { content: raw, error: null };
+  } catch (error) {
+    return { content: null, error: error?.message || 'OpenAI request failed' };
+  }
+};
+
 module.exports = {
   generateAIResponse,
   generateDeckJsonFromPrompt,
+  generateAgenciesDeckEditWithContext,
   getServicePrompt,
   generateSalaryTemplate,
   generateExpenseTemplate,

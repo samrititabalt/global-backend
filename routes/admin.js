@@ -37,10 +37,18 @@ const MarketResearchAccessCode = require('../models/MarketResearchAccessCode');
 const FirstCallDeckMR = require('../models/FirstCallDeckMR');
 const FirstCallDeckAgencies = require('../models/FirstCallDeckAgencies');
 const SiteSetting = require('../models/SiteSetting');
-const { generateAIResponse, generateDeckJsonFromPrompt } = require('../services/openaiService');
+const multer = require('multer');
+const agenciesDeckContextUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 15 * 1024 * 1024, files: 8 }
+});
+const { generateAIResponse, generateDeckJsonFromPrompt, generateAgenciesDeckEditWithContext } = require('../services/openaiService');
 const { DEFAULT_PLANS } = require('../constants/defaultPlans');
 const { DEFAULT_MARKET_RESEARCH_DECK } = require('../data/defaultMarketResearchDeck');
 const { DEFAULT_AGENCIES_DECK } = require('../data/defaultAgenciesDeck');
+const { normalizeAgenciesSlides } = require('../utils/agenciesDeckNormalize');
+const pdfParse = require('pdf-parse');
+const mammoth = require('mammoth');
 const AskSandyLever = require('../models/AskSandyLever');
 const AskSandyNews = require('../models/AskSandyNews');
 const AskSandyRating = require('../models/AskSandyRating');
@@ -501,6 +509,62 @@ router.post(
 
 // ========== FIRST CALL DECK (AGENCIES) ==========
 
+function mergeAgenciesAiSlideUpdates(slides, filteredUpdates) {
+  const updatedById = new Map(filteredUpdates.map((slide) => [Number(slide.id), slide]));
+  const mergedSlides = slides.map((slide) => {
+    const update = updatedById.get(Number(slide.id));
+    if (!update) return slide;
+    return {
+      ...slide,
+      ...update,
+      id: slide.id,
+      type: update.type || slide.type
+    };
+  });
+  const existingIds = new Set(slides.map((slide) => Number(slide.id)));
+  const appendedSlides = filteredUpdates
+    .filter((slide) => !existingIds.has(Number(slide.id)))
+    .map((slide, index) => ({
+      ...slide,
+      id: slide.id || slides.length + index + 1,
+      type: slide.type || 'agenda'
+    }));
+  return [...mergedSlides, ...appendedSlides];
+}
+
+async function saveAgenciesDeckNormalized(slides, req) {
+  const normalized = normalizeAgenciesSlides(slides);
+  return FirstCallDeckAgencies.findOneAndUpdate(
+    {},
+    {
+      slides: normalized,
+      updatedBy: {
+        id: req.user?._id,
+        name: req.user?.name || 'Admin',
+        role: 'admin'
+      },
+      updatedAt: new Date()
+    },
+    { new: true, upsert: true }
+  );
+}
+
+function applyAgenciesImageUpdates(slides, updates) {
+  if (!Array.isArray(updates) || !updates.length) return slides;
+  return slides.map((s) => {
+    const u = updates.find((x) => x && Number(x.id) === Number(s.id));
+    if (!u) return s;
+    const next = { ...s };
+    if (u.image && typeof u.image === 'object') {
+      next.image = { ...(s.image || {}), ...u.image };
+    }
+    if (u.heroImage && typeof u.heroImage === 'object') {
+      next.heroImage = { ...(s.heroImage || {}), ...u.heroImage };
+    }
+    return next;
+  });
+}
+
 // @route   GET /api/admin/first-call-deck-agencies
 // @desc    Get Agencies first call deck
 // @access  Private (Admin)
@@ -519,10 +583,12 @@ router.get('/first-call-deck-agencies', protect, authorize('admin'), async (req,
 router.put('/first-call-deck-agencies', protect, authorize('admin'), async (req, res) => {
   try {
     const slides = Array.isArray(req.body?.slides) ? req.body.slides : [];
+    const visualTheme = req.body?.visualTheme === 'consultingDark' ? 'consultingDark' : 'standard';
     const deck = await FirstCallDeckAgencies.findOneAndUpdate(
       {},
       {
         slides,
+        visualTheme,
         updatedBy: {
           id: req.user?._id,
           name: req.user?.name || 'Admin',
@@ -614,44 +680,144 @@ ${instruction}
       return res.status(502).json({ message: 'AI response invalid. No slide updates found.' });
     }
 
-    const updatedById = new Map(filteredUpdates.map((slide) => [slide.id, slide]));
-    const mergedSlides = slides.map((slide) => {
-      const update = updatedById.get(slide.id);
-      if (!update) return slide;
-      return {
-        ...slide,
-        ...update,
-        id: slide.id,
-        type: update.type || slide.type
-      };
-    });
-
-    const existingIds = new Set(slides.map((slide) => slide.id));
-    const appendedSlides = filteredUpdates
-      .filter((slide) => !existingIds.has(slide.id))
-      .map((slide, index) => ({
-        ...slide,
-        id: slide.id || slides.length + index + 1,
-        type: slide.type || 'agenda'
-      }));
-
-    const finalSlides = [...mergedSlides, ...appendedSlides];
-
-    const deck = await FirstCallDeckAgencies.findOneAndUpdate(
-      {},
-      {
-        slides: finalSlides,
-        updatedBy: {
-          id: req.user?._id,
-          name: req.user?.name || 'Admin',
-          role: 'admin'
-        },
-        updatedAt: new Date()
-      },
-      { new: true, upsert: true }
-    );
+    const finalSlides = mergeAgenciesAiSlideUpdates(slides, filteredUpdates);
+    const deck = await saveAgenciesDeckNormalized(finalSlides, req);
 
     res.json({ success: true, deck, summary: parsed?.summary || 'Deck updated.' });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   POST /api/admin/first-call-deck-agencies/ai-edit-context
+// @desc    AI edit with screenshots / PDF / DOCX context (multipart)
+// @access  Private (Admin)
+router.post(
+  '/first-call-deck-agencies/ai-edit-context',
+  protect,
+  authorize('admin'),
+  agenciesDeckContextUpload.array('contextFiles', 8),
+  async (req, res) => {
+    try {
+      const instruction = typeof req.body?.instruction === 'string' ? req.body.instruction.trim() : '';
+      let slides = [];
+      try {
+        slides = JSON.parse(req.body?.slides || '[]');
+      } catch (e) {
+        return res.status(400).json({ message: 'Invalid slides JSON' });
+      }
+      if (!instruction) {
+        return res.status(400).json({ message: 'Instruction is required' });
+      }
+      if (!Array.isArray(slides) || !slides.length) {
+        return res.status(400).json({ message: 'Slides are required' });
+      }
+      if (!process.env.OPENAI_API_KEY || !process.env.OPENAI_API_KEY.trim()) {
+        return res.status(503).json({ message: 'AI is not configured.' });
+      }
+
+      const imageDataUrls = [];
+      const textParts = [];
+      const files = req.files || [];
+      for (const f of files) {
+        const mime = f.mimetype || '';
+        if (mime.startsWith('image/')) {
+          imageDataUrls.push(`data:${mime};base64,${f.buffer.toString('base64')}`);
+        } else if (mime === 'application/pdf') {
+          try {
+            const data = await pdfParse(f.buffer);
+            if (data?.text) textParts.push(data.text.slice(0, 12000));
+          } catch (e) {
+            textParts.push(`[PDF could not be parsed: ${e.message}]`);
+          }
+        } else if (
+          mime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+          mime === 'application/msword'
+        ) {
+          try {
+            const { value } = await mammoth.extractRawText({ buffer: f.buffer });
+            if (value) textParts.push(value.slice(0, 12000));
+          } catch (e) {
+            textParts.push(`[DOCX could not be parsed: ${e.message}]`);
+          }
+        } else if (mime === 'text/plain') {
+          textParts.push(f.buffer.toString('utf8').slice(0, 12000));
+        }
+      }
+
+      const aiResult = await generateAgenciesDeckEditWithContext({
+        instruction,
+        slidesJson: JSON.stringify(slides),
+        imageDataUrls,
+        documentText: textParts.join('\n---\n')
+      });
+      const aiRaw = aiResult?.content;
+      if (!aiRaw) {
+        return res.status(502).json({ message: aiResult?.error || 'AI returned no output.' });
+      }
+      const parsed = parseJsonWithFallback(aiRaw);
+      const parsedSlides = Array.isArray(parsed?.slides) ? parsed.slides : null;
+      if (!parsedSlides?.length) {
+        return res.status(502).json({ message: 'AI response invalid. Try again or simplify.' });
+      }
+      const sanitizedUpdates = parsedSlides
+        .filter((slide) => slide && typeof slide === 'object')
+        .map((slide) =>
+          Object.entries(slide).reduce((acc, [key, value]) => {
+            if (value !== undefined) acc[key] = value;
+            return acc;
+          }, {})
+        );
+      if (!sanitizedUpdates.length) {
+        return res.status(502).json({ message: 'No slide updates in AI response.' });
+      }
+      const finalSlides = mergeAgenciesAiSlideUpdates(slides, sanitizedUpdates);
+      const deck = await saveAgenciesDeckNormalized(finalSlides, req);
+      res.json({ success: true, deck, summary: parsed?.summary || 'Deck updated with context.' });
+    } catch (error) {
+      res.status(500).json({ message: 'Server error', error: error.message });
+    }
+  }
+);
+
+// @route   POST /api/admin/first-call-deck-agencies/suggest-images
+// @desc    Propose Unsplash-style image URLs per slide (merge client-side or save optional)
+// @access  Private (Admin)
+router.post('/first-call-deck-agencies/suggest-images', protect, authorize('admin'), async (req, res) => {
+  try {
+    const slides = Array.isArray(req.body?.slides) ? req.body.slides : [];
+    if (!slides.length) {
+      return res.status(400).json({ message: 'Slides required' });
+    }
+    if (!process.env.OPENAI_API_KEY || !process.env.OPENAI_API_KEY.trim()) {
+      return res.status(503).json({ message: 'AI is not configured.' });
+    }
+    const prompt = `You propose imagery for a Tabalt staffing deck. Input slides JSON:
+${JSON.stringify(slides).slice(0, 18000)}
+
+Return JSON ONLY:
+{ "summary": "short", "updates": [ { "id": <slide id>, "image": { "url": "https://images.unsplash.com/...", "alt": "...", "caption": "..." } } OR { "id": <slide id>, "heroImage": { "url", "alt", "caption" } } ] }
+
+Rules:
+- Use real https://images.unsplash.com/photo-... URLs with ?w=900&auto=format&fit=crop (or similar) only.
+- For type "agenda" set "image".
+- For "executivePage1" or "executivePage2" set "heroImage" (not image).
+- For "portfolioGrid" you may return one update with id matching that slide and include only if user asked for a hero — skip grid card icons unless explicitly needed; prefer one strong image per slide where the slide type supports a main visual.
+- Include at most one update object per slide id. Only slides that benefit from a photo.`;
+
+    const aiResult = await generateDeckJsonFromPrompt(prompt);
+    const aiRaw = aiResult?.content;
+    if (!aiRaw) {
+      return res.status(502).json({ message: aiResult?.error || 'AI returned no output.' });
+    }
+    const parsed = parseJsonWithFallback(aiRaw);
+    const updates = Array.isArray(parsed?.updates) ? parsed.updates : [];
+    const merged = normalizeAgenciesSlides(applyAgenciesImageUpdates(slides, updates));
+    res.json({
+      success: true,
+      slides: merged,
+      summary: parsed?.summary || 'Image suggestions applied.'
+    });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
   }
@@ -669,6 +835,12 @@ router.post('/first-call-deck-agencies/generate-from-brief', protect, authorize(
     const category = typeof req.body?.category === 'string' ? req.body.category.trim() : '';
     const jobDescriptions = typeof req.body?.jobDescriptions === 'string' ? req.body.jobDescriptions.trim() : '';
     const outputFormat = req.body?.outputFormat === 'executive' ? 'executive' : 'full';
+    const visualTheme = req.body?.visualTheme === 'consultingDark' ? 'consultingDark' : 'standard';
+    const themeNote =
+      visualTheme === 'consultingDark'
+        ? `
+VISUAL THEME "consultingDark": Copy should feel at home on a dark navy cover (#0a1628) with teal accents (#2dd4bf) and gold highlights (#fbbf24). Keep headlines punchy; body text will render white/light on dark in the app — avoid light-gray-on-white phrasing.`
+        : '';
 
     if (!roleDescription || !clientName || !clientUrl || !industry || !category) {
       return res.status(400).json({
@@ -722,7 +894,9 @@ ${jobDescriptions ? `- Job description(s) to reflect in talent mapping, skills a
       "servicesColumn1Bullets": ["bullet", "..."],
       "servicesColumn2Title": "Recruitment (direct hire)",
       "servicesColumn2Bullets": ["bullet", "..."],
-      "extraDifferentiators": [ { "title": "...", "text": "..." }, { "title": "...", "text": "..." } ]
+      "extraDifferentiators": [ { "title": "...", "text": "..." }, { "title": "...", "text": "..." } ],
+      "layout": "split",
+      "heroImage": { "url": "https://images.unsplash.com/photo-...?w=900&auto=format&fit=crop", "alt": "Relevant workplace or cloud/AI visual", "caption": "Short caption" }
     },
     {
       "id": 2,
@@ -737,13 +911,16 @@ ${jobDescriptions ? `- Job description(s) to reflect in talent mapping, skills a
       "talentMapping": "Short paragraph",
       "skillsAlignment": "Short paragraph",
       "engagementModel": "Concrete proposed model (onshore/offshore, coordinator, value-based milestone idea)",
-      "nextSteps": ["3-5 bullets"]
+      "nextSteps": ["3-5 bullets"],
+      "layout": "split",
+      "heroImage": { "url": "https://images.unsplash.com/photo-...?w=900&auto=format&fit=crop", "alt": "...", "caption": "..." }
     }
   ]
 }
 
 ${tabaltContext}
-Use UK English where natural. Be specific to the client; avoid generic staffing clichés.`;
+${themeNote}
+You MUST include heroImage with a real Unsplash https URL on BOTH executive slides. Use UK English; be specific to the client.`;
     } else {
       userPrompt = `Generate a multi-slide first-call deck for Tabalt Ltd speaking TO recruitment / talent agencies (we want to be a trusted supplier). Return JSON ONLY:
 {
@@ -752,6 +929,7 @@ Use UK English where natural. Be specific to the client; avoid generic staffing 
 }
 
 Each slide MUST have: id (number), type (string), icon (emoji), title, tagline, and fields required for its type.
+Use EXACT type strings in lowercase camelCase: "companyProfile", "portfolioGrid", "askSamOverview", "howWorks", "caseStudies", "serviceOptions", "whyChoose", "agenda" — never spaced or Title Case.
 
 Allowed types and required fields:
 - agenda: agendaItems (string[]), image { url (use a neutral Unsplash workplace URL), alt, caption }
@@ -768,7 +946,8 @@ Produce exactly 8 slides with ids 1–8 in order: agenda, companyProfile, portfo
 Include a credibility line on companyProfile or askSamOverview referencing BCG, Bain, McKinsey as firms whose bar we understand.
 
 ${tabaltContext}
-Use UK English. Client-specific throughout; no generic filler.`;
+${themeNote}
+Use UK English. Client-specific throughout; no generic filler. Every array field must be a non-empty JSON array of strings or objects as specified — never omit aboutDescription, services, cards, differentiators, steps, cases, categories, or reasons.`;
     }
 
     const aiResult = await generateDeckJsonFromPrompt(userPrompt);
@@ -791,10 +970,12 @@ Use UK English. Client-specific throughout; no generic filler.`;
       });
     }
 
+    const normalizedSlides = normalizeAgenciesSlides(parsedSlides);
     const deck = await FirstCallDeckAgencies.findOneAndUpdate(
       {},
       {
-        slides: parsedSlides,
+        slides: normalizedSlides,
+        visualTheme,
         updatedBy: {
           id: req.user?._id,
           name: req.user?.name || 'Admin',
@@ -820,6 +1001,7 @@ router.post('/first-call-deck-agencies/reset', protect, authorize('admin'), asyn
       {},
       {
         slides: DEFAULT_AGENCIES_DECK,
+        visualTheme: 'standard',
         updatedBy: {
           id: req.user?._id,
           name: req.user?.name || 'Admin',
