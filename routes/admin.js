@@ -37,7 +37,7 @@ const MarketResearchAccessCode = require('../models/MarketResearchAccessCode');
 const FirstCallDeckMR = require('../models/FirstCallDeckMR');
 const FirstCallDeckAgencies = require('../models/FirstCallDeckAgencies');
 const SiteSetting = require('../models/SiteSetting');
-const { generateAIResponse } = require('../services/openaiService');
+const { generateAIResponse, generateDeckJsonFromPrompt } = require('../services/openaiService');
 const { DEFAULT_PLANS } = require('../constants/defaultPlans');
 const { DEFAULT_MARKET_RESEARCH_DECK } = require('../data/defaultMarketResearchDeck');
 const { DEFAULT_AGENCIES_DECK } = require('../data/defaultAgenciesDeck');
@@ -573,7 +573,7 @@ Rules:
 - Preserve slide layout by keeping each slide "type".
 - You may edit text, images, and lists.
 - You may add or remove slides, but each slide must include a valid "type".
-- Allowed types: agenda, companyProfile, portfolioGrid, askSamOverview, howWorks, caseStudies, serviceOptions, whyChoose.
+- Allowed types: agenda, companyProfile, portfolioGrid, askSamOverview, howWorks, caseStudies, serviceOptions, whyChoose, executivePage1, executivePage2.
 - Keep content focused on agencies: we understand they have other partners; we want a small opportunity to test us and build trust; we can come to their office.
 - Tone: professional, consultative, no pressure. Big 4–style clarity.
 - If a slide has an "icon" field (emoji), keep or set an appropriate icon for the header.
@@ -650,6 +650,155 @@ ${instruction}
     );
 
     res.json({ success: true, deck, summary: parsed?.summary || 'Deck updated.' });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   POST /api/admin/first-call-deck-agencies/generate-from-brief
+// @desc    Generate full or executive deck from client brief (GPT-4o-mini JSON)
+// @access  Private (Admin)
+router.post('/first-call-deck-agencies/generate-from-brief', protect, authorize('admin'), async (req, res) => {
+  try {
+    const roleDescription = typeof req.body?.roleDescription === 'string' ? req.body.roleDescription.trim() : '';
+    const clientName = typeof req.body?.clientName === 'string' ? req.body.clientName.trim() : '';
+    const clientUrl = typeof req.body?.clientUrl === 'string' ? req.body.clientUrl.trim() : '';
+    const industry = typeof req.body?.industry === 'string' ? req.body.industry.trim() : '';
+    const category = typeof req.body?.category === 'string' ? req.body.category.trim() : '';
+    const jobDescriptions = typeof req.body?.jobDescriptions === 'string' ? req.body.jobDescriptions.trim() : '';
+    const outputFormat = req.body?.outputFormat === 'executive' ? 'executive' : 'full';
+
+    if (!roleDescription || !clientName || !clientUrl || !industry || !category) {
+      return res.status(400).json({
+        message: 'Role description, client name, client URL, industry, and category are required.'
+      });
+    }
+
+    if (!process.env.OPENAI_API_KEY || !process.env.OPENAI_API_KEY.trim()) {
+      return res.status(503).json({
+        message: 'AI is not configured. Please set OPENAI_API_KEY and try again.'
+      });
+    }
+
+    const tabaltContext = `
+TABALT LTD — MUST INCLUDE THESE THEMES (consulting-grade tone, no fluff):
+A) Why off-the-shelf / fixed packages fail: AI and tech change constantly; only adaptive human talent stays relevant.
+B) Value-based pricing: clients may withhold 20–30% until contractor delivers agreed outcomes.
+C) Budget-aligned pricing and flexible commercial terms.
+D) Pre-trained workforce before deployment — shorter ramp.
+E) Zero-risk onboarding: if a contractor is not a fit, no notice-period cost to client; Tabalt handles replacement.
+F) Credibility: trusted by demanding global consulting firms — name-check Boston Consulting Group (BCG), Bain & Company, and McKinsey & Company as reference-calibre relationships (word professionally, do not invent specific engagements).
+G) Free project coordinator included.
+H) Hire-to-payroll option: client may later hire the contractor directly (rare in the industry).
+I) Two services: (1) Contractors on Tabalt payroll — staff augmentation, UK onshore + India offshore, value-based pricing, hire-to-payroll, pre-trained, free coordinator, fast replacement. (2) Recruitment — one-time fee model (field ops fee + commission), flexible case-by-case.
+J) Add 1–2 additional differentiators grounded in current industry trends and the client's sector (Industry: ${industry}, Category: ${category}).
+
+CLIENT BRIEF:
+- Roles: ${roleDescription}
+- Client: ${clientName} | Website: ${clientUrl}
+- Industry: ${industry} | Category: ${category}
+${jobDescriptions ? `- Job description(s) to reflect in talent mapping, skills alignment, engagement:\n${jobDescriptions}` : '- No JD text supplied; infer sensible role themes from the role description only.'}
+`;
+
+    let userPrompt;
+    if (outputFormat === 'executive') {
+      userPrompt = `Generate a 2-page executive flier for Tabalt Ltd as JSON ONLY:
+{
+  "summary": "one line",
+  "slides": [
+    {
+      "id": 1,
+      "type": "executivePage1",
+      "icon": "📌",
+      "title": "Tabalt Ltd — Who We Are",
+      "tagline": "Adaptive talent for cloud, data, engineering & AI",
+      "whoWeAre": "2-3 sentences",
+      "differentiators": [ { "title": "Short label", "text": "One crisp sentence each — cover themes A–I above across items" } ],
+      "credibilityBlock": "Sentence naming BCG, Bain, McKinsey and trust at the highest bar",
+      "consultingFirms": [ "BCG", "Bain & Company", "McKinsey & Company" ],
+      "servicesColumn1Title": "Staff augmentation (Tabalt payroll)",
+      "servicesColumn1Bullets": ["bullet", "..."],
+      "servicesColumn2Title": "Recruitment (direct hire)",
+      "servicesColumn2Bullets": ["bullet", "..."],
+      "extraDifferentiators": [ { "title": "...", "text": "..." }, { "title": "...", "text": "..." } ]
+    },
+    {
+      "id": 2,
+      "type": "executivePage2",
+      "icon": "🎯",
+      "title": "Engagement tailored to ${clientName}",
+      "tagline": "${industry} — ${category}",
+      "clientName": "${clientName}",
+      "clientUrl": "${clientUrl}",
+      "rolesNarrative": "Paragraph tying ${roleDescription} to how Tabalt sources and deploys talent",
+      "jdHighlights": ${jobDescriptions ? '["3-5 bullets distilled from JDs"]' : '[]'},
+      "talentMapping": "Short paragraph",
+      "skillsAlignment": "Short paragraph",
+      "engagementModel": "Concrete proposed model (onshore/offshore, coordinator, value-based milestone idea)",
+      "nextSteps": ["3-5 bullets"]
+    }
+  ]
+}
+
+${tabaltContext}
+Use UK English where natural. Be specific to the client; avoid generic staffing clichés.`;
+    } else {
+      userPrompt = `Generate a multi-slide first-call deck for Tabalt Ltd speaking TO recruitment / talent agencies (we want to be a trusted supplier). Return JSON ONLY:
+{
+  "summary": "one line",
+  "slides": [ ... ]
+}
+
+Each slide MUST have: id (number), type (string), icon (emoji), title, tagline, and fields required for its type.
+
+Allowed types and required fields:
+- agenda: agendaItems (string[]), image { url (use a neutral Unsplash workplace URL), alt, caption }
+- companyProfile: aboutTitle, aboutDescription (string[]), servicesTitle, services (string[]), mission, vision — Tabalt staffing positioning, mention ${clientName} where natural
+- portfolioGrid: cards [{ icon emoji, title, description }] — how we support agencies (capacity, quality, white-label style support)
+- askSamOverview: headline, intro, differentiators [{ title, text }] — weave Tabalt themes A–J
+- howWorks: steps [{ number, title, text }], workflow (string[])
+- caseStudies: cases [{ title, challenge, solution, outcome }] — make plausible and aligned to ${industry}/${category} and roles: ${roleDescription}
+- serviceOptions: categories [{ title, items: string[] }] — staff aug vs recruitment, UK/India, coordinator, value-based hooks
+- whyChoose: headline, reasons [{ title, text }] — close with next step for agencies
+
+Produce exactly 8 slides with ids 1–8 in order: agenda, companyProfile, portfolioGrid, askSamOverview, howWorks, caseStudies, serviceOptions, whyChoose.
+
+Include a credibility line on companyProfile or askSamOverview referencing BCG, Bain, McKinsey as firms whose bar we understand.
+
+${tabaltContext}
+Use UK English. Client-specific throughout; no generic filler.`;
+    }
+
+    const aiRaw = await generateDeckJsonFromPrompt(userPrompt);
+    if (!aiRaw) {
+      return res.status(502).json({ message: 'AI returned no output. Check OPENAI_API_KEY and try again.' });
+    }
+    const parsed = parseJsonWithFallback(aiRaw);
+    if (parsed?.error) {
+      return res.status(502).json({ message: parsed.error || 'AI could not generate the deck.' });
+    }
+    const parsedSlides = Array.isArray(parsed?.slides) ? parsed.slides : null;
+    if (!parsedSlides || !parsedSlides.length) {
+      return res.status(502).json({
+        message: 'AI response invalid. Try again or shorten the brief.'
+      });
+    }
+
+    const deck = await FirstCallDeckAgencies.findOneAndUpdate(
+      {},
+      {
+        slides: parsedSlides,
+        updatedBy: {
+          id: req.user?._id,
+          name: req.user?.name || 'Admin',
+          role: 'admin'
+        },
+        updatedAt: new Date()
+      },
+      { new: true, upsert: true }
+    );
+
+    res.json({ success: true, deck, summary: parsed?.summary || 'Deck generated from brief.' });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
   }

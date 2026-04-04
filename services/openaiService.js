@@ -531,8 +531,38 @@ const generateRequestFlowResponse = async (messages = []) => {
   }
 };
 
+/**
+ * Long-form JSON generation for deck builders (uses same model as chat: gpt-4o-mini by default).
+ */
+const generateDeckJsonFromPrompt = async (userPrompt) => {
+  const client = getOpenAIClient();
+  if (!client) {
+    return null;
+  }
+  try {
+    const completion = await client.chat.completions.create({
+      model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+      messages: [
+        {
+          role: 'system',
+          content:
+            'You are a document engine for Tabalt Ltd. Reply with ONLY valid JSON (no markdown code fences, no explanation before or after). If you cannot comply, return {"error":"reason"}.'
+        },
+        { role: 'user', content: userPrompt }
+      ],
+      temperature: numberFromEnv(process.env.OPENAI_DECK_TEMPERATURE, 0.35),
+      max_tokens: numberFromEnv(process.env.OPENAI_DECK_MAX_TOKENS, 12000)
+    });
+    return (completion.choices?.[0]?.message?.content || '').trim();
+  } catch (error) {
+    console.error('generateDeckJsonFromPrompt error:', error?.message);
+    return null;
+  }
+};
+
 module.exports = {
   generateAIResponse,
+  generateDeckJsonFromPrompt,
   getServicePrompt,
   generateSalaryTemplate,
   generateExpenseTemplate,
