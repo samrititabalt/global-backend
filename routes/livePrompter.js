@@ -272,9 +272,16 @@ router.post('/summarize', protect, authorize('admin'), async (req, res) => {
 // @route   POST /api/admin/live-prompter/prompt
 router.post('/prompt', protect, authorize('admin'), async (req, res) => {
   try {
-    const question = typeof req.body?.question === 'string' ? req.body.question.trim() : '';
-    if (!question) {
-      return res.status(400).json({ message: 'question is required' });
+    let questions = [];
+    if (Array.isArray(req.body?.questions)) {
+      questions = req.body.questions
+        .map((q) => (typeof q === 'string' ? q.trim() : ''))
+        .filter(Boolean);
+    } else if (typeof req.body?.question === 'string' && req.body.question.trim()) {
+      questions = [req.body.question.trim()];
+    }
+    if (!questions.length) {
+      return res.status(400).json({ message: 'questions (non-empty array) or question is required' });
     }
 
     const repo = await LivePrompterRepository.findOne({ userId: req.user._id });
@@ -287,7 +294,7 @@ router.post('/prompt', protect, authorize('admin'), async (req, res) => {
 
     const trainingInstructions = (repo.trainingInstructions || '').trim();
     const suggestion = await livePrompterSuggestAnswer({
-      question,
+      questions,
       structuredProfile: profile,
       trainingInstructions
     });

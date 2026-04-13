@@ -706,9 +706,12 @@ Rules:
 ## LinkedIn reference
 For LinkedIn: if only a URL was provided and no page text, write the URL and state that profile content was not fetched (reference only).`;
 
-const LIVE_PROMPTER_ANSWER_BASE = `You are a live interview prompter. You know this candidate's background from the knowledge repository. You must generate a concise, natural 1–2 line answer that the candidate can say out loud. Do not invent experience that is not supported by the knowledge repository. Apply the user's permanent training instructions exactly as written.
+const LIVE_PROMPTER_ANSWER_BASE = `You are a live interview prompter. You know this candidate's background from the knowledge repository. Generate a concise, natural 1–2 line answer for each question. Apply the user's permanent training instructions. Never invent experience not supported by the knowledge repository.
 
-Reply with ONLY the answer text — no quotes, no preamble.`;
+Reply with ONLY numbered answers in plain text, one per line, in the form:
+Answer 1: …
+Answer 2: …
+Use as many lines as there are questions. No preamble, no markdown, no extra commentary.`;
 
 /**
  * Build structured knowledge profile from raw materials (GPT-4o-mini).
@@ -738,30 +741,40 @@ const livePrompterSummarizeKnowledge = async (rawBundle) => {
 };
 
 /**
- * @param {{ question: string, structuredProfile: string, trainingInstructions?: string }} params
+ * @param {{ questions: string[], structuredProfile: string, trainingInstructions?: string }} params
  * @returns {Promise<string>}
  */
-const livePrompterSuggestAnswer = async ({ question, structuredProfile, trainingInstructions }) => {
+const livePrompterSuggestAnswer = async ({ questions, structuredProfile, trainingInstructions }) => {
   const client = getOpenAIClient();
   if (!client) {
     throw new Error('OpenAI is not configured (OPENAI_API_KEY).');
+  }
+  const qs = (questions || []).map((q) => String(q).trim()).filter(Boolean);
+  if (!qs.length) {
+    throw new Error('At least one question is required.');
   }
   const train = (trainingInstructions || '').trim();
   let systemContent = LIVE_PROMPTER_ANSWER_BASE;
   if (train) {
     systemContent += `\n\n--- User's permanent training instructions ---\n${train.slice(0, 8000)}`;
   }
+  const numbered = qs.map((q, i) => `${i + 1}. ${q}`).join('\n');
+  const profile = (structuredProfile || 'Empty.').slice(0, 60000);
+  const userContent = `Detected question(s):
+${numbered}
+
+Candidate profile: ${profile}
+
+Respond with Answer 1, Answer 2, etc. — one concise natural 1–2 line answer per question, matching the numbering above.`;
+  const maxTokens = Math.min(900, 140 + qs.length * 160);
   const completion = await client.chat.completions.create({
     model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
     messages: [
       { role: 'system', content: systemContent },
-      {
-        role: 'user',
-        content: `Question from Person A: ${question.trim()}\nCandidate profile: ${(structuredProfile || 'Empty.').slice(0, 60000)}\nRespond with a short 1–2 line answer.`
-      }
+      { role: 'user', content: userContent }
     ],
     temperature: 0.4,
-    max_tokens: 220
+    max_tokens: maxTokens
   });
   const out = normalizeAssistantText(completion.choices?.[0]?.message?.content);
   if (!out) throw new Error('OpenAI returned an empty suggestion.');
