@@ -88,6 +88,7 @@ function serializeRepo(repo) {
       : null,
     structuredProfile: o.structuredProfile || '',
     knowledgeSummaryUpdatedAt: o.knowledgeSummaryUpdatedAt || null,
+    trainingInstructions: o.trainingInstructions || '',
     updatedAt: o.updatedAt
   };
 }
@@ -149,6 +150,22 @@ router.delete('/documents/:id', protect, authorize('admin'), async (req, res) =>
       await deleteFromCloudinary(doc.cloudinaryPublicId, 'raw').catch(() => {});
     }
     repo.documents.pull({ _id: req.params.id });
+    await repo.save();
+    res.json(serializeRepo(repo));
+  } catch (e) {
+    res.status(500).json({ message: e.message || 'Server error' });
+  }
+});
+
+const MAX_TRAINING_CHARS = 8000;
+
+// @route   PUT /api/admin/live-prompter/training
+router.put('/training', protect, authorize('admin'), async (req, res) => {
+  try {
+    const raw = typeof req.body?.trainingInstructions === 'string' ? req.body.trainingInstructions : '';
+    const trainingInstructions = raw.slice(0, MAX_TRAINING_CHARS);
+    const repo = await getOrCreateRepo(req.user._id);
+    repo.trainingInstructions = trainingInstructions;
     await repo.save();
     res.json(serializeRepo(repo));
   } catch (e) {
@@ -268,7 +285,12 @@ router.post('/prompt', protect, authorize('admin'), async (req, res) => {
       });
     }
 
-    const suggestion = await livePrompterSuggestAnswer({ question, structuredProfile: profile });
+    const trainingInstructions = (repo.trainingInstructions || '').trim();
+    const suggestion = await livePrompterSuggestAnswer({
+      question,
+      structuredProfile: profile,
+      trainingInstructions
+    });
     res.json({ suggestion });
   } catch (e) {
     res.status(500).json({ message: e.message || 'Prompt failed' });

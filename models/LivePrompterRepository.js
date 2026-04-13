@@ -36,7 +36,9 @@ const livePrompterRepositorySchema = new mongoose.Schema(
     audioIntroduction: { type: audioIntroSchema, default: undefined },
     /** Consolidated profile for GPT context (plain text / markdown). */
     structuredProfile: { type: String, default: '' },
-    knowledgeSummaryUpdatedAt: { type: Date }
+    knowledgeSummaryUpdatedAt: { type: Date },
+    /** Permanent user instructions appended to live prompter system prompt. */
+    trainingInstructions: { type: String, default: '' }
   },
   { timestamps: true }
 );

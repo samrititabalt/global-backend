@@ -706,7 +706,8 @@ Rules:
 ## LinkedIn reference
 For LinkedIn: if only a URL was provided and no page text, write the URL and state that profile content was not fetched (reference only).`;
 
-const LIVE_PROMPTER_ANSWER_SYSTEM = `You are a live interview prompter. You know this candidate's background from the knowledge repository. For each question, generate a concise, natural 1–2 line answer that the candidate can say out loud. Do not invent experience that is not supported by the knowledge repository.
+const LIVE_PROMPTER_ANSWER_BASE = `You are a live interview prompter. You know this candidate's background from the knowledge repository. You must generate a concise, natural 1–2 line answer that the candidate can say out loud. Do not invent experience that is not supported by the knowledge repository. Apply the user's permanent training instructions exactly as written.
+
 Reply with ONLY the answer text — no quotes, no preamble.`;
 
 /**
@@ -737,18 +738,23 @@ const livePrompterSummarizeKnowledge = async (rawBundle) => {
 };
 
 /**
- * @param {{ question: string, structuredProfile: string }} params
+ * @param {{ question: string, structuredProfile: string, trainingInstructions?: string }} params
  * @returns {Promise<string>}
  */
-const livePrompterSuggestAnswer = async ({ question, structuredProfile }) => {
+const livePrompterSuggestAnswer = async ({ question, structuredProfile, trainingInstructions }) => {
   const client = getOpenAIClient();
   if (!client) {
     throw new Error('OpenAI is not configured (OPENAI_API_KEY).');
   }
+  const train = (trainingInstructions || '').trim();
+  let systemContent = LIVE_PROMPTER_ANSWER_BASE;
+  if (train) {
+    systemContent += `\n\n--- User's permanent training instructions ---\n${train.slice(0, 8000)}`;
+  }
   const completion = await client.chat.completions.create({
     model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
     messages: [
-      { role: 'system', content: LIVE_PROMPTER_ANSWER_SYSTEM },
+      { role: 'system', content: systemContent },
       {
         role: 'user',
         content: `Question from Person A: ${question.trim()}\nCandidate profile: ${(structuredProfile || 'Empty.').slice(0, 60000)}\nRespond with a short 1–2 line answer.`
