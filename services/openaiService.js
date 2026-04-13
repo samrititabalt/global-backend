@@ -692,6 +692,79 @@ const generateAgenciesDeckEditWithContext = async ({
   }
 };
 
+const LIVE_PROMPTER_KNOWLEDGE_SYSTEM = `You consolidate candidate materials into ONE structured knowledge profile for a live interview prompter.
+Rules:
+- Use ONLY facts present in the supplied materials. Do not invent employers, dates, skills, certifications, or projects.
+- If a section has no data, write "Not specified in provided materials."
+- Output plain text with these section headings (exactly):
+## Key skills
+## Experience summary
+## Projects
+## Industries
+## Strengths
+## Career highlights
+## LinkedIn reference
+For LinkedIn: if only a URL was provided and no page text, write the URL and state that profile content was not fetched (reference only).`;
+
+const LIVE_PROMPTER_ANSWER_SYSTEM = `You are a live interview prompter. You know this candidate's background ONLY from the knowledge repository provided.
+For each question, generate a concise, natural 1–2 line answer the candidate can say out loud.
+Be honest: do not invent experience not supported by the repository.
+If the repository does not contain enough to answer, give a short honest response they could say (e.g. offer to elaborate on related experience they do have per the profile) without fabricating facts.
+Reply with ONLY the suggested spoken lines — no quotes, no preamble, no bullet labels.`;
+
+/**
+ * Build structured knowledge profile from raw materials (GPT-4o-mini).
+ * @param {string} rawBundle
+ * @returns {Promise<string>}
+ */
+const livePrompterSummarizeKnowledge = async (rawBundle) => {
+  const client = getOpenAIClient();
+  if (!client) {
+    throw new Error('OpenAI is not configured (OPENAI_API_KEY).');
+  }
+  const completion = await client.chat.completions.create({
+    model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+    messages: [
+      { role: 'system', content: LIVE_PROMPTER_KNOWLEDGE_SYSTEM },
+      {
+        role: 'user',
+        content: `Materials to consolidate:\n\n${rawBundle.slice(0, 100000)}`
+      }
+    ],
+    temperature: 0.25,
+    max_tokens: positiveIntFromEnv(process.env.OPENAI_LIVE_PROMPTER_MAX_TOKENS, 2000, 200)
+  });
+  const out = normalizeAssistantText(completion.choices?.[0]?.message?.content);
+  if (!out) throw new Error('OpenAI returned an empty knowledge profile.');
+  return out;
+};
+
+/**
+ * @param {{ question: string, structuredProfile: string }} params
+ * @returns {Promise<string>}
+ */
+const livePrompterSuggestAnswer = async ({ question, structuredProfile }) => {
+  const client = getOpenAIClient();
+  if (!client) {
+    throw new Error('OpenAI is not configured (OPENAI_API_KEY).');
+  }
+  const completion = await client.chat.completions.create({
+    model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+    messages: [
+      { role: 'system', content: LIVE_PROMPTER_ANSWER_SYSTEM },
+      {
+        role: 'user',
+        content: `Candidate knowledge repository:\n${(structuredProfile || 'Empty.').slice(0, 60000)}\n\nQuestion from interviewer:\n${question.trim()}`
+      }
+    ],
+    temperature: 0.4,
+    max_tokens: 220
+  });
+  const out = normalizeAssistantText(completion.choices?.[0]?.message?.content);
+  if (!out) throw new Error('OpenAI returned an empty suggestion.');
+  return out;
+};
+
 module.exports = {
   generateAIResponse,
   generateDeckJsonFromPrompt,
@@ -700,6 +773,9 @@ module.exports = {
   generateSalaryTemplate,
   generateExpenseTemplate,
   extractExpenseFieldsFromImage,
-  generateRequestFlowResponse
+  generateRequestFlowResponse,
+  getOpenAIClient,
+  livePrompterSummarizeKnowledge,
+  livePrompterSuggestAnswer
 };
 

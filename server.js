@@ -107,6 +107,7 @@ app.use('/api/auth', require('./routes/auth'));
 app.use('/api/customer', require('./routes/customer'));
 app.use('/api/agent', require('./routes/agent'));
 app.use('/api/admin', require('./routes/admin'));
+app.use('/api/admin/live-prompter', require('./routes/livePrompter'));
 app.use('/api/public', require('./routes/public'));
 app.use('/api/chat', require('./routes/chat'));
 app.use('/api/call', require('./routes/call'));
