@@ -22,6 +22,17 @@ const audioIntroSchema = new mongoose.Schema(
   { _id: false }
 );
 
+const knowledgeBankSchema = new mongoose.Schema(
+  {
+    documents: { type: [documentSchema], default: [] },
+    linkedInUrl: { type: String, default: '' },
+    audioIntroduction: { type: audioIntroSchema, default: undefined },
+    structuredProfile: { type: String, default: '' },
+    knowledgeSummaryUpdatedAt: { type: Date }
+  },
+  { _id: false }
+);
+
 const livePrompterRepositorySchema = new mongoose.Schema(
   {
     userId: {
@@ -31,14 +42,23 @@ const livePrompterRepositorySchema = new mongoose.Schema(
       unique: true,
       index: true
     },
-    documents: [documentSchema],
-    linkedInUrl: { type: String, default: '' },
+    /** Which knowledge bank live answers use (full-screen + prompt). */
+    activeMode: {
+      type: String,
+      enum: ['interview', 'clientMeeting'],
+      default: 'interview'
+    },
+    interviewKnowledge: { type: knowledgeBankSchema, default: () => ({}) },
+    clientMeetingKnowledge: { type: knowledgeBankSchema, default: () => ({}) },
+    /** @deprecated Migrated into interviewKnowledge — kept for legacy DB reads */
+    documents: { type: [documentSchema], default: undefined },
+    linkedInUrl: { type: String, default: undefined },
     audioIntroduction: { type: audioIntroSchema, default: undefined },
-    /** Consolidated profile for GPT context (plain text / markdown). */
-    structuredProfile: { type: String, default: '' },
-    knowledgeSummaryUpdatedAt: { type: Date },
+    structuredProfile: { type: String, default: undefined },
+    knowledgeSummaryUpdatedAt: { type: Date, default: undefined },
     /** Permanent user instructions appended to live prompter system prompt. */
-    trainingInstructions: { type: String, default: '' }
+    trainingInstructions: { type: String, default: '' },
+    trainingInstructionsUpdatedAt: { type: Date }
   },
   { timestamps: true }
 );

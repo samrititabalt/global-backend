@@ -692,7 +692,7 @@ const generateAgenciesDeckEditWithContext = async ({
   }
 };
 
-const LIVE_PROMPTER_KNOWLEDGE_SYSTEM = `You consolidate candidate materials into ONE structured knowledge profile for a live interview prompter.
+const LIVE_PROMPTER_KNOWLEDGE_SYSTEM_INTERVIEW = `You consolidate candidate materials into ONE structured knowledge profile for a live job-interview prompter.
 Rules:
 - Use ONLY facts present in the supplied materials. Do not invent employers, dates, skills, certifications, or projects.
 - If a section has no data, write "Not specified in provided materials."
@@ -703,10 +703,40 @@ Rules:
 ## Industries
 ## Strengths
 ## Career highlights
+## Leadership / problem-solving examples
 ## LinkedIn reference
 For LinkedIn: if only a URL was provided and no page text, write the URL and state that profile content was not fetched (reference only).`;
 
-const LIVE_PROMPTER_ANSWER_BASE = `You are a live interview prompter. You know this candidate's background from the knowledge repository. Generate a concise, natural 1–2 line answer for each question. Apply the user's permanent training instructions. Never invent experience not supported by the knowledge repository.
+const LIVE_PROMPTER_KNOWLEDGE_SYSTEM_CLIENT = `You consolidate Tabalt sales and delivery materials into ONE structured knowledge profile for a live client-meeting prompter.
+Rules:
+- Use ONLY facts present in the supplied materials (deck, rate card, company profile, sales notes). Do not invent pricing, clients, or claims not stated.
+- If a section has no data, write "Not specified in provided materials."
+- Output plain text with these section headings (exactly):
+## Tabalt positioning
+## Services & staff augmentation
+## Engagement models
+## Pricing & value (value-based pricing if mentioned)
+## Differentiators (boutique, flexible, high-trust; pre-trained workforce; free project coordinator; hire-to-payroll if mentioned)
+## Credibility (BCG, Bain, McKinsey or other named clients only if present in materials)
+## Client pain points & responses (budget, risk, training, trust)
+## Key talking points`;
+
+const LIVE_PROMPTER_ANSWER_INTERVIEW = `You are a live interview prompter helping the user answer job interview questions. Use the candidate's resume, experience documents, LinkedIn, and audio profile. Generate a concise, natural 1–2 line answer for each question. Do not invent experience. Apply the user's permanent training instructions.
+
+Also: be professional and personal; highlight skills, achievements, experience, strengths, projects, domain knowledge, leadership, problem-solving, and clear communication — without sounding like a sales pitch. Only use what the knowledge repository supports.
+
+You MUST follow the user's permanent training instructions below exactly when they are present.
+
+Reply with ONLY numbered answers in plain text, one per line, in the form:
+Answer 1: …
+Answer 2: …
+Use as many lines as there are questions. No preamble, no markdown, no extra commentary.`;
+
+const LIVE_PROMPTER_ANSWER_CLIENT = `You are a live sales prompter helping the user represent Tabalt in a client meeting. Use the Tabalt PPT/PDF deck, rate card, company profile, and sales documents. Generate a concise, persuasive 1–2 line answer for each question that positions Tabalt as a boutique, flexible, high-trust staffing partner. Apply the user's permanent training instructions.
+
+Emphasize value-based pricing, pre-trained workforce, free project coordinator, hire-to-payroll, speed, trust, and differentiation from typical agencies only when supported by the materials. Mention BCG, Bain, McKinsey only if they appear in the materials. Address client pain points (budget, risk, training, trust) when relevant.
+
+You MUST follow the user's permanent training instructions below exactly when they are present.
 
 Reply with ONLY numbered answers in plain text, one per line, in the form:
 Answer 1: …
@@ -716,17 +746,20 @@ Use as many lines as there are questions. No preamble, no markdown, no extra com
 /**
  * Build structured knowledge profile from raw materials (GPT-4o-mini).
  * @param {string} rawBundle
+ * @param {'interview'|'clientMeeting'} [knowledgeMode]
  * @returns {Promise<string>}
  */
-const livePrompterSummarizeKnowledge = async (rawBundle) => {
+const livePrompterSummarizeKnowledge = async (rawBundle, knowledgeMode = 'interview') => {
   const client = getOpenAIClient();
   if (!client) {
     throw new Error('OpenAI is not configured (OPENAI_API_KEY).');
   }
+  const system =
+    knowledgeMode === 'clientMeeting' ? LIVE_PROMPTER_KNOWLEDGE_SYSTEM_CLIENT : LIVE_PROMPTER_KNOWLEDGE_SYSTEM_INTERVIEW;
   const completion = await client.chat.completions.create({
     model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
     messages: [
-      { role: 'system', content: LIVE_PROMPTER_KNOWLEDGE_SYSTEM },
+      { role: 'system', content: system },
       {
         role: 'user',
         content: `Materials to consolidate:\n\n${rawBundle.slice(0, 100000)}`
@@ -741,10 +774,15 @@ const livePrompterSummarizeKnowledge = async (rawBundle) => {
 };
 
 /**
- * @param {{ questions: string[], structuredProfile: string, trainingInstructions?: string }} params
+ * @param {{ questions: string[], structuredProfile: string, trainingInstructions?: string, prompterMode?: 'interview'|'clientMeeting' }} params
  * @returns {Promise<string>}
  */
-const livePrompterSuggestAnswer = async ({ questions, structuredProfile, trainingInstructions }) => {
+const livePrompterSuggestAnswer = async ({
+  questions,
+  structuredProfile,
+  trainingInstructions,
+  prompterMode = 'interview'
+}) => {
   const client = getOpenAIClient();
   if (!client) {
     throw new Error('OpenAI is not configured (OPENAI_API_KEY).');
@@ -754,16 +792,20 @@ const livePrompterSuggestAnswer = async ({ questions, structuredProfile, trainin
     throw new Error('At least one question is required.');
   }
   const train = (trainingInstructions || '').trim();
-  let systemContent = LIVE_PROMPTER_ANSWER_BASE;
+  const base =
+    prompterMode === 'clientMeeting' ? LIVE_PROMPTER_ANSWER_CLIENT : LIVE_PROMPTER_ANSWER_INTERVIEW;
+  let systemContent = base;
   if (train) {
-    systemContent += `\n\n--- User's permanent training instructions ---\n${train.slice(0, 8000)}`;
+    systemContent += `\n\n--- User's permanent training instructions (apply to every answer) ---\n${train.slice(0, 8000)}`;
   }
   const numbered = qs.map((q, i) => `${i + 1}. ${q}`).join('\n');
   const profile = (structuredProfile || 'Empty.').slice(0, 60000);
+  const repoLabel =
+    prompterMode === 'clientMeeting' ? 'Tabalt knowledge repository' : 'Candidate profile (knowledge repository)';
   const userContent = `Detected question(s):
 ${numbered}
 
-Candidate profile: ${profile}
+${repoLabel}: ${profile}
 
 Respond with Answer 1, Answer 2, etc. — one concise natural 1–2 line answer per question, matching the numbering above.`;
   const maxTokens = Math.min(900, 140 + qs.length * 160);
