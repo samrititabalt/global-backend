@@ -706,11 +706,8 @@ Rules:
 ## LinkedIn reference
 For LinkedIn: if only a URL was provided and no page text, write the URL and state that profile content was not fetched (reference only).`;
 
-const LIVE_PROMPTER_ANSWER_SYSTEM = `You are a live interview prompter. You know this candidate's background ONLY from the knowledge repository provided.
-For each question, generate a concise, natural 1–2 line answer the candidate can say out loud.
-Be honest: do not invent experience not supported by the repository.
-If the repository does not contain enough to answer, give a short honest response they could say (e.g. offer to elaborate on related experience they do have per the profile) without fabricating facts.
-Reply with ONLY the suggested spoken lines — no quotes, no preamble, no bullet labels.`;
+const LIVE_PROMPTER_ANSWER_SYSTEM = `You are a live interview prompter. You know this candidate's background from the knowledge repository. For each question, generate a concise, natural 1–2 line answer that the candidate can say out loud. Do not invent experience that is not supported by the knowledge repository.
+Reply with ONLY the answer text — no quotes, no preamble.`;
 
 /**
  * Build structured knowledge profile from raw materials (GPT-4o-mini).
@@ -754,7 +751,7 @@ const livePrompterSuggestAnswer = async ({ question, structuredProfile }) => {
       { role: 'system', content: LIVE_PROMPTER_ANSWER_SYSTEM },
       {
         role: 'user',
-        content: `Candidate knowledge repository:\n${(structuredProfile || 'Empty.').slice(0, 60000)}\n\nQuestion from interviewer:\n${question.trim()}`
+        content: `Question from Person A: ${question.trim()}\nCandidate profile: ${(structuredProfile || 'Empty.').slice(0, 60000)}\nRespond with a short 1–2 line answer.`
       }
     ],
     temperature: 0.4,
