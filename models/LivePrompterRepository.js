@@ -58,7 +58,9 @@ const livePrompterRepositorySchema = new mongoose.Schema(
     knowledgeSummaryUpdatedAt: { type: Date, default: undefined },
     /** Permanent user instructions appended to live prompter system prompt. */
     trainingInstructions: { type: String, default: '' },
-    trainingInstructionsUpdatedAt: { type: Date }
+    trainingInstructionsUpdatedAt: { type: Date },
+    /** Correct spellings for names/brands (fuzzy-corrected in transcripts). */
+    glossaryTerms: { type: [String], default: [] }
   },
   { timestamps: true }
 );

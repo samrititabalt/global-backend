@@ -9,7 +9,13 @@ const { protect, authorize } = require('../middleware/auth');
 const LivePrompterRepository = require('../models/LivePrompterRepository');
 const { uploadFile, uploadAudio, deleteFromCloudinary } = require('../services/cloudinary');
 const { extractDocumentText, transcribeAudioBuffer } = require('../services/livePrompterContent');
-const { livePrompterSummarizeKnowledge, livePrompterSuggestAnswer } = require('../services/openaiService');
+const { applyFuzzyGlossary } = require('../utils/livePrompterGlossary');
+const { extractQuestionsFromPausedTranscript } = require('../utils/livePrompterQuestionSplit');
+const {
+  livePrompterSummarizeKnowledge,
+  livePrompterSuggestAnswer,
+  livePrompterCleanQuestion
+} = require('../services/openaiService');
 
 const router = express.Router();
 
@@ -168,6 +174,7 @@ function serializeRepo(repo) {
     clientMeeting: serializeBank(o.clientMeetingKnowledge),
     trainingInstructions: o.trainingInstructions || '',
     trainingInstructionsUpdatedAt: o.trainingInstructionsUpdatedAt || null,
+    glossaryTerms: Array.isArray(o.glossaryTerms) ? o.glossaryTerms.filter(Boolean) : [],
     updatedAt: o.updatedAt
   };
 }
@@ -257,6 +264,33 @@ router.delete('/documents/:id', protect, authorize('admin'), async (req, res) =>
 });
 
 const MAX_TRAINING_CHARS = 8000;
+const MAX_GLOSSARY_TERMS = 200;
+const MAX_GLOSSARY_TERM_LEN = 100;
+
+// @route   PUT /api/admin/live-prompter/glossary
+router.put('/glossary', protect, authorize('admin'), async (req, res) => {
+  try {
+    let terms = [];
+    if (Array.isArray(req.body?.glossaryTerms)) {
+      terms = req.body.glossaryTerms
+        .map((t) => (typeof t === 'string' ? t.trim().slice(0, MAX_GLOSSARY_TERM_LEN) : ''))
+        .filter(Boolean);
+    } else if (typeof req.body?.glossaryText === 'string') {
+      terms = req.body.glossaryText
+        .split(/[\n,]+/)
+        .map((t) => t.trim().slice(0, MAX_GLOSSARY_TERM_LEN))
+        .filter(Boolean);
+    }
+    terms = [...new Set(terms.map((t) => t.replace(/\s+/g, ' ')))].slice(0, MAX_GLOSSARY_TERMS);
+
+    const repo = await getOrCreateRepo(req.user._id);
+    repo.glossaryTerms = terms;
+    await repo.save();
+    res.json(serializeRepo(repo));
+  } catch (e) {
+    res.status(500).json({ message: e.message || 'Server error' });
+  }
+});
 
 // @route   PUT /api/admin/live-prompter/training
 router.put('/training', protect, authorize('admin'), async (req, res) => {
@@ -387,20 +421,10 @@ router.post('/summarize', protect, authorize('admin'), async (req, res) => {
 });
 
 // @route   POST /api/admin/live-prompter/prompt
+// Body: { rawTranscript, mode } after Pause — fuzzy glossary, GPT clean, then answer.
+// Or legacy: { questions[], mode } or { question, mode }
 router.post('/prompt', protect, authorize('admin'), async (req, res) => {
   try {
-    let questions = [];
-    if (Array.isArray(req.body?.questions)) {
-      questions = req.body.questions
-        .map((q) => (typeof q === 'string' ? q.trim() : ''))
-        .filter(Boolean);
-    } else if (typeof req.body?.question === 'string' && req.body.question.trim()) {
-      questions = [req.body.question.trim()];
-    }
-    if (!questions.length) {
-      return res.status(400).json({ message: 'questions (non-empty array) or question is required' });
-    }
-
     const repo = await LivePrompterRepository.findOne({ userId: req.user._id });
     if (!repo) {
       return res.status(400).json({ message: 'Repository not found.' });
@@ -417,13 +441,40 @@ router.post('/prompt', protect, authorize('admin'), async (req, res) => {
     }
 
     const trainingInstructions = (repo.trainingInstructions || '').trim();
+    const glossary = (repo.glossaryTerms || []).map((t) => String(t).trim()).filter(Boolean);
+
+    let questions = [];
+    let cleanedQuestion = '';
+
+    if (typeof req.body?.rawTranscript === 'string' && req.body.rawTranscript.trim()) {
+      let text = req.body.rawTranscript.trim().slice(0, 12000);
+      text = applyFuzzyGlossary(text, glossary);
+      const cleaned = await livePrompterCleanQuestion(text, glossary);
+      cleanedQuestion = cleaned;
+      const extracted = extractQuestionsFromPausedTranscript(cleaned);
+      questions = extracted.length ? extracted : cleaned.length >= 3 ? [cleaned] : [];
+    } else if (Array.isArray(req.body?.questions)) {
+      questions = req.body.questions
+        .map((q) => (typeof q === 'string' ? q.trim() : ''))
+        .filter(Boolean);
+    } else if (typeof req.body?.question === 'string' && req.body.question.trim()) {
+      questions = [req.body.question.trim()];
+    }
+
+    if (!questions.length) {
+      return res.status(400).json({
+        message:
+          'Provide rawTranscript (after Pause) or questions[]. Nothing to answer — capture speech, then Pause when the question is complete.'
+      });
+    }
+
     const suggestion = await livePrompterSuggestAnswer({
       questions,
       structuredProfile: profile,
       trainingInstructions,
       prompterMode: mode
     });
-    res.json({ suggestion });
+    res.json({ suggestion, cleanedQuestion: cleanedQuestion || undefined });
   } catch (e) {
     res.status(500).json({ message: e.message || 'Prompt failed' });
   }

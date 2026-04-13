@@ -773,6 +773,41 @@ const livePrompterSummarizeKnowledge = async (rawBundle, knowledgeMode = 'interv
   return out;
 };
 
+const LIVE_PROMPTER_CLEAN_TRANSCRIPT_SYSTEM = `You are a transcription cleaner. You receive a raw transcript of a spoken question and a list of correct names/terms. Fix obvious mis-transcriptions of those names/terms without changing the meaning or adding content. Keep the same language and sentence structure. Return ONLY the cleaned question text — no quotes, no preamble.`;
+
+/**
+ * Light GPT pass to fix glossary-related mishears (after local fuzzy pass).
+ * @param {string} rawQuestion
+ * @param {string[]} glossaryTerms
+ * @returns {Promise<string>}
+ */
+const livePrompterCleanQuestion = async (rawQuestion, glossaryTerms) => {
+  const raw = String(rawQuestion || '').trim();
+  if (!raw) return raw;
+  const terms = (glossaryTerms || []).map((t) => String(t).trim()).filter(Boolean).slice(0, 120);
+  if (!terms.length) return raw;
+  const client = getOpenAIClient();
+  if (!client) return raw;
+  try {
+    const completion = await client.chat.completions.create({
+      model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+      messages: [
+        { role: 'system', content: LIVE_PROMPTER_CLEAN_TRANSCRIPT_SYSTEM },
+        {
+          role: 'user',
+          content: `Raw question:\n${raw.slice(0, 8000)}\n\nKnown correct terms:\n${terms.join(', ')}\n\nReturn the cleaned question only.`
+        }
+      ],
+      temperature: 0.1,
+      max_tokens: 1200
+    });
+    const out = normalizeAssistantText(completion.choices?.[0]?.message?.content);
+    return out || raw;
+  } catch (_) {
+    return raw;
+  }
+};
+
 /**
  * @param {{ questions: string[], structuredProfile: string, trainingInstructions?: string, prompterMode?: 'interview'|'clientMeeting' }} params
  * @returns {Promise<string>}
@@ -834,6 +869,7 @@ module.exports = {
   generateRequestFlowResponse,
   getOpenAIClient,
   livePrompterSummarizeKnowledge,
-  livePrompterSuggestAnswer
+  livePrompterSuggestAnswer,
+  livePrompterCleanQuestion
 };
 
