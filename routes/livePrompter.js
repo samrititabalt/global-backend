@@ -224,7 +224,10 @@ router.post('/documents', protect, authorize('admin'), (req, res, next) => {
 
     const folder = `live-prompter/${req.user._id}/${mode}`;
     const up = await uploadFile(req.file.buffer, folder, req.file.mimetype);
-    const extractedText = await extractDocumentText(req.file.buffer, req.file.mimetype);
+    const extractedText = await extractDocumentText(req.file.buffer, req.file.mimetype, {
+      enableOcr: mode === 'interview',
+      fileName: req.file.originalname
+    });
 
     bank.documents.push({
       fileName: req.file.originalname,
