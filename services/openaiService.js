@@ -743,6 +743,13 @@ Answer 1: …
 Answer 2: …
 Use as many lines as there are questions. No preamble, no markdown, no extra commentary.`;
 
+const LIVE_PROMPTER_POINTS_SYSTEM = `You are a live interview prompter generating ultra-concise bullet-point talking cues. Do NOT write full sentences. Produce 3-6 short pointers (3-7 words each). Make them high-impact, easy to read, and directly relevant to the question. Use the active knowledge repository (Interview Mode or Client Meeting Mode).
+
+Output rules:
+- Return plain text bullet points only.
+- Each line must start with "- ".
+- No headings, no intro, no numbering, no commentary.`;
+
 /**
  * Build structured knowledge profile from raw materials (GPT-4o-mini).
  * @param {string} rawBundle
@@ -858,6 +865,41 @@ Respond with Answer 1, Answer 2, etc. — one concise natural 1–2 line answer 
   return out;
 };
 
+/**
+ * @param {{ question: string, structuredProfile: string, prompterMode?: 'interview'|'clientMeeting' }} params
+ * @returns {Promise<string>}
+ */
+const livePrompterSuggestPointers = async ({ question, structuredProfile, prompterMode = 'interview' }) => {
+  const client = getOpenAIClient();
+  if (!client) {
+    throw new Error('OpenAI is not configured (OPENAI_API_KEY).');
+  }
+  const q = String(question || '').trim();
+  if (!q) {
+    throw new Error('Question is required.');
+  }
+  const profile = (structuredProfile || 'Empty.').slice(0, 60000);
+  const repoLabel =
+    prompterMode === 'clientMeeting' ? 'Tabalt knowledge repository' : 'Candidate profile (knowledge repository)';
+  const userContent = `Interviewer question: ${q}
+
+${repoLabel}: ${profile}
+
+Generate short bullet-point cues only.`;
+  const completion = await client.chat.completions.create({
+    model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+    messages: [
+      { role: 'system', content: LIVE_PROMPTER_POINTS_SYSTEM },
+      { role: 'user', content: userContent }
+    ],
+    temperature: 0.35,
+    max_tokens: 320
+  });
+  const out = normalizeAssistantText(completion.choices?.[0]?.message?.content);
+  if (!out) throw new Error('OpenAI returned empty pointers.');
+  return out;
+};
+
 module.exports = {
   generateAIResponse,
   generateDeckJsonFromPrompt,
@@ -870,6 +912,7 @@ module.exports = {
   getOpenAIClient,
   livePrompterSummarizeKnowledge,
   livePrompterSuggestAnswer,
-  livePrompterCleanQuestion
+  livePrompterCleanQuestion,
+  livePrompterSuggestPointers
 };
 

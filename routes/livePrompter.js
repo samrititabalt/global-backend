@@ -14,7 +14,8 @@ const { extractQuestionsFromPausedTranscript } = require('../utils/livePrompterQ
 const {
   livePrompterSummarizeKnowledge,
   livePrompterSuggestAnswer,
-  livePrompterCleanQuestion
+  livePrompterCleanQuestion,
+  livePrompterSuggestPointers
 } = require('../services/openaiService');
 
 const router = express.Router();
@@ -480,6 +481,39 @@ router.post('/prompt', protect, authorize('admin'), async (req, res) => {
     res.json({ suggestion, cleanedQuestion: cleanedQuestion || undefined });
   } catch (e) {
     res.status(500).json({ message: e.message || 'Prompt failed' });
+  }
+});
+
+// @route   POST /api/admin/live-prompter/points-prompt
+// Body: { question, mode }
+router.post('/points-prompt', protect, authorize('admin'), async (req, res) => {
+  try {
+    const repo = await LivePrompterRepository.findOne({ userId: req.user._id });
+    if (!repo) {
+      return res.status(400).json({ message: 'Repository not found.' });
+    }
+    await migrateLegacyKnowledge(repo);
+
+    const mode = MODES.includes(req.body?.mode) ? req.body.mode : parseMode(repo.activeMode);
+    const bank = getBank(repo, mode);
+    const profile = bank?.structuredProfile?.trim() || '';
+    if (!profile) {
+      return res.status(400).json({
+        message: `Knowledge profile is empty for ${mode === 'clientMeeting' ? 'Client Meeting' : 'Interview'} mode. Run “Generate / Refresh Knowledge Summary” first.`
+      });
+    }
+    const question = typeof req.body?.question === 'string' ? req.body.question.trim() : '';
+    if (!question) {
+      return res.status(400).json({ message: 'Question is required.' });
+    }
+    const pointers = await livePrompterSuggestPointers({
+      question,
+      structuredProfile: profile,
+      prompterMode: mode
+    });
+    res.json({ pointers });
+  } catch (e) {
+    res.status(500).json({ message: e.message || 'Points prompt failed' });
   }
 });
 
