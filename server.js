@@ -26,14 +26,17 @@ const allowedOrigins = [
   'https://mainproduct.vercel.app',
   'https://www.samstudios.uk',
   'https://samstudios.uk',
+  'https://www.tabalt.co.uk',
+  'https://tabalt.co.uk',
   'http://localhost:5173',
   'http://localhost:3000',
   ...envOrigins
-];
+].map((o) => o.replace(/\/+$/, ''));
 
 const corsOptions = {
   origin: (origin, callback) => {
-    if (!origin || allowedOrigins.includes(origin)) {
+    const normalizedOrigin = origin ? origin.replace(/\/+$/, '') : origin;
+    if (!normalizedOrigin || allowedOrigins.includes(normalizedOrigin)) {
       callback(null, true);
     } else {
       callback(new Error('CORS not allowed'));
