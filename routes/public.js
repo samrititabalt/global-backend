@@ -91,13 +91,13 @@ router.post('/chatbot-message', async (req, res) => {
       });
       // Use a helpful fallback message if AI generation fails
       const messagePreview = message.substring(0, 50);
-      aiResponse = `Thanks for your message about "${messagePreview}${message.length > 50 ? '...' : ''}". I can help with Salesforce, cloud, data, BI hiring plans, engagement models, and team structure guidance.`;
+      aiResponse = `Thanks for your message about "${messagePreview}${message.length > 50 ? '...' : ''}". I can help with Salesforce, data engineering, Tableau, and Power BI staff augmentation, pilots, and engagement structure.`;
     }
 
     // Ensure we have a response
     if (!aiResponse || typeof aiResponse !== 'string') {
       console.warn('AI response is invalid, using fallback');
-      aiResponse = `I can help with staffing guidance across Salesforce, cloud engineering, data, BI, and managed team models.`;
+      aiResponse = `I can help with staffing guidance for Salesforce developers, data engineers and analysts, Tableau developers, and Power BI developers—UK coordination and India delivery.`;
     }
 
     // Track chatbot interaction activity (completely non-blocking - use setTimeout to defer)
