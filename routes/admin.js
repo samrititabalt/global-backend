@@ -36,6 +36,7 @@ const fs = require('fs');
 const MarketResearchAccessCode = require('../models/MarketResearchAccessCode');
 const FirstCallDeckMR = require('../models/FirstCallDeckMR');
 const FirstCallDeckAgencies = require('../models/FirstCallDeckAgencies');
+const FirstCallDeckStaffAug = require('../models/FirstCallDeckStaffAug');
 const SiteSetting = require('../models/SiteSetting');
 const multer = require('multer');
 const agenciesDeckContextUpload = multer({
@@ -46,6 +47,10 @@ const { generateAIResponse, generateDeckJsonFromPrompt, generateAgenciesDeckEdit
 const { DEFAULT_PLANS } = require('../constants/defaultPlans');
 const { DEFAULT_MARKET_RESEARCH_DECK } = require('../data/defaultMarketResearchDeck');
 const { DEFAULT_AGENCIES_DECK } = require('../data/defaultAgenciesDeck');
+const {
+  DEFAULT_STAFF_AUG_OUTBOUND_DECK,
+  STAFF_AUG_OUTBOUND_COLLATERAL
+} = require('../data/defaultStaffAugOutboundDeck');
 const { normalizeAgenciesSlides } = require('../utils/agenciesDeckNormalize');
 const pdfParse = require('pdf-parse');
 const mammoth = require('mammoth');
@@ -1006,6 +1011,73 @@ router.post('/first-call-deck-agencies/reset', protect, authorize('admin'), asyn
       {
         slides: DEFAULT_AGENCIES_DECK,
         visualTheme: 'standard',
+        updatedBy: {
+          id: req.user?._id,
+          name: req.user?.name || 'Admin',
+          role: 'admin'
+        },
+        updatedAt: new Date()
+      },
+      { new: true, upsert: true }
+    );
+    res.json({ success: true, deck });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   GET /api/admin/staff-augment-outbound-deck
+// @desc    Tabalt outbound staff-aug deck (admin + collateral snippets)
+// @access  Private (Admin)
+router.get('/staff-augment-outbound-deck', protect, authorize('admin'), async (req, res) => {
+  try {
+    const deckDoc = await FirstCallDeckStaffAug.findOne({});
+    const slides =
+      deckDoc?.slides && deckDoc.slides.length ? deckDoc.slides : DEFAULT_STAFF_AUG_OUTBOUND_DECK;
+    res.json({
+      success: true,
+      deck: { ...(deckDoc ? deckDoc.toObject() : {}), slides },
+      collateral: STAFF_AUG_OUTBOUND_COLLATERAL
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   PUT /api/admin/staff-augment-outbound-deck
+// @desc    Save outbound staff-aug deck slides
+// @access  Private (Admin)
+router.put('/staff-augment-outbound-deck', protect, authorize('admin'), async (req, res) => {
+  try {
+    const slides = Array.isArray(req.body?.slides) ? req.body.slides : [];
+    const deck = await FirstCallDeckStaffAug.findOneAndUpdate(
+      {},
+      {
+        slides,
+        updatedBy: {
+          id: req.user?._id,
+          name: req.user?.name || 'Admin',
+          role: 'admin'
+        },
+        updatedAt: new Date()
+      },
+      { new: true, upsert: true }
+    );
+    res.json({ success: true, deck });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   POST /api/admin/staff-augment-outbound-deck/reset
+// @desc    Reset outbound deck to Tabalt defaults
+// @access  Private (Admin)
+router.post('/staff-augment-outbound-deck/reset', protect, authorize('admin'), async (req, res) => {
+  try {
+    const deck = await FirstCallDeckStaffAug.findOneAndUpdate(
+      {},
+      {
+        slides: DEFAULT_STAFF_AUG_OUTBOUND_DECK,
         updatedBy: {
           id: req.user?._id,
           name: req.user?.name || 'Admin',

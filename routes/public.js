@@ -17,6 +17,8 @@ const FirstCallDeckMR = require('../models/FirstCallDeckMR');
 const FirstCallDeckAgencies = require('../models/FirstCallDeckAgencies');
 const { DEFAULT_MARKET_RESEARCH_DECK } = require('../data/defaultMarketResearchDeck');
 const { DEFAULT_AGENCIES_DECK } = require('../data/defaultAgenciesDeck');
+const FirstCallDeckStaffAug = require('../models/FirstCallDeckStaffAug');
+const { DEFAULT_STAFF_AUG_OUTBOUND_DECK } = require('../data/defaultStaffAugOutboundDeck');
 const HomepageTestimonial = require('../models/HomepageTestimonial');
 const { HOMEPAGE_TESTIMONIALS_FALLBACK } = require('../utils/homepageTestimonialsFallback');
 
@@ -682,6 +684,19 @@ router.get('/first-call-deck-agencies', async (req, res) => {
     res.json({ success: true, deck: { slides } });
   } catch (error) {
     res.status(500).json({ success: false, deck: { slides: DEFAULT_AGENCIES_DECK } });
+  }
+});
+
+// @route   GET /api/public/staff-augment-outbound-deck
+// @desc    Tabalt outbound staff-aug sales deck (public share link)
+// @access  Public
+router.get('/staff-augment-outbound-deck', async (req, res) => {
+  try {
+    const doc = await FirstCallDeckStaffAug.findOne({});
+    const slides = doc?.slides?.length ? doc.slides : DEFAULT_STAFF_AUG_OUTBOUND_DECK;
+    res.json({ success: true, deck: { slides } });
+  } catch (error) {
+    res.status(500).json({ success: false, deck: { slides: DEFAULT_STAFF_AUG_OUTBOUND_DECK } });
   }
 });
 
