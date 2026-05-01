@@ -17,6 +17,44 @@ const FirstCallDeckMR = require('../models/FirstCallDeckMR');
 const FirstCallDeckAgencies = require('../models/FirstCallDeckAgencies');
 const { DEFAULT_MARKET_RESEARCH_DECK } = require('../data/defaultMarketResearchDeck');
 const { DEFAULT_AGENCIES_DECK } = require('../data/defaultAgenciesDeck');
+const HomepageTestimonial = require('../models/HomepageTestimonial');
+const { HOMEPAGE_TESTIMONIALS_FALLBACK } = require('../utils/homepageTestimonialsFallback');
+
+// @route   GET /api/public/testimonials
+// @desc    Homepage testimonial ticker (MongoDB when seeded, else static fallback)
+// @access  Public
+router.get('/testimonials', async (req, res) => {
+  try {
+    const rows = await HomepageTestimonial.find({ isActive: true }).sort({ sortOrder: 1 }).lean().exec();
+
+    if (!rows.length) {
+      return res.json({
+        success: true,
+        source: 'fallback',
+        testimonials: HOMEPAGE_TESTIMONIALS_FALLBACK,
+      });
+    }
+
+    const testimonials = rows.map((t) => ({
+      id: String(t._id),
+      quote: t.quote,
+      name: t.name,
+      role: t.role,
+      company: t.company,
+      imageUrl: t.imageUrl,
+      tags: Array.isArray(t.tags) ? t.tags : [],
+    }));
+
+    return res.json({ success: true, source: 'database', testimonials });
+  } catch (err) {
+    console.warn('Public testimonials route error:', err.message);
+    return res.json({
+      success: true,
+      source: 'fallback',
+      testimonials: HOMEPAGE_TESTIMONIALS_FALLBACK,
+    });
+  }
+});
 
 // @route   GET /api/public/plans
 // @desc    Get all available plans (public)
