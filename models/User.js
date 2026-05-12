@@ -215,15 +215,17 @@ userSchema.pre('save', async function(next) {
     this.accessCode = await generateUniqueAccessCode({ excludeUserId: this._id });
   }
   
-  // Skip password hashing if user is OAuth-only and password is not set
-  if (!this.isModified('password') || (this.oauthProvider && !this.password)) {
+  if (!this.isModified('password')) {
     return next();
   }
-  
-  // Only hash password if it exists
-  if (this.password) {
-    this.password = await bcrypt.hash(this.password, 10);
+  if (!this.password) {
+    return next();
   }
+  // Already bcrypt (e.g. set in route or re-save) — never double-hash
+  if (typeof this.password === 'string' && /^\$2[aby]\$\d{2}\$/.test(this.password)) {
+    return next();
+  }
+  this.password = await bcrypt.hash(this.password, 10);
   next();
 });
 

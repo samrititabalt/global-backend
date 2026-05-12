@@ -236,8 +236,9 @@ router.post('/login', [
     }
 
     const { email, password, expectedRole } = req.body;
+    const normalizedEmail = String(email).toLowerCase().trim();
 
-    const user = await User.findOne({ email });
+    const user = await User.findOne({ email: normalizedEmail });
     if (!user) {
       return res.status(401).json({ message: 'Invalid credentials' });
     }
@@ -248,7 +249,7 @@ router.post('/login', [
     // This check happens BEFORE password check to prevent role confusion
     if (expectedRole && user.role !== expectedRole) {
       // Special exception for owner email to login as Admin
-      if (email.toLowerCase() === 'spbajaj25@gmail.com' && expectedRole === 'admin') {
+      if (normalizedEmail === 'spbajaj25@gmail.com' && expectedRole === 'admin') {
         // Allow login - will handle admin access below
         console.log('Special admin login allowed for owner email');
       } else {
@@ -260,7 +261,7 @@ router.post('/login', [
 
     // Special handling for spbajaj25@gmail.com admin login
     // If logging in as admin, check for admin password or set up admin access
-    if (email.toLowerCase() === 'spbajaj25@gmail.com' && expectedRole === 'admin') {
+    if (normalizedEmail === 'spbajaj25@gmail.com' && expectedRole === 'admin') {
       const bcrypt = require('bcryptjs');
       const defaultAdminPassword = 'sam12345';
       
@@ -473,7 +474,7 @@ router.get('/services', protect, async (req, res) => {
 // @access  Public
 router.post('/forgot-password', [
   body('email').isEmail().withMessage('Please provide a valid email'),
-  body('role').isIn(['customer', 'agent']).withMessage('Invalid user role')
+  body('role').isIn(['customer', 'agent', 'admin']).withMessage('Invalid user role')
 ], async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -482,8 +483,9 @@ router.post('/forgot-password', [
     }
 
     const { email, role } = req.body;
+    const normalizedEmail = String(email).toLowerCase().trim();
 
-    const user = await User.findOne({ email, role });
+    const user = await User.findOne({ email: normalizedEmail, role });
     if (!user) {
       // Don't reveal if user exists for security
       return res.status(404).json({
@@ -502,14 +504,14 @@ router.post('/forgot-password', [
 
     // Send OTP email
     try {
-      console.log(`📧 Sending password reset OTP to ${email} (${role})...`);
+      console.log(`📧 Sending password reset OTP to ${normalizedEmail} (${role})...`);
       const { sendPasswordResetOTPEmail } = require('../utils/sendEmail');
-      const emailResult = await sendPasswordResetOTPEmail(email, user.name, otpCode, role);
+      const emailResult = await sendPasswordResetOTPEmail(normalizedEmail, user.name, otpCode, role);
       console.log(
-        `✅ Password reset OTP accepted by Brevo for ${email} (${role}); messageId=${emailResult?.messageId || 'n/a'} — check Brevo Transactional logs if inbox is empty`
+        `✅ Password reset OTP accepted by Brevo for ${normalizedEmail} (${role}); messageId=${emailResult?.messageId || 'n/a'} — check Brevo Transactional logs if inbox is empty`
       );
     } catch (emailError) {
-      console.error(`❌ Password reset OTP email failure for ${email} (${role}):`, emailError.message);
+      console.error(`❌ Password reset OTP email failure for ${normalizedEmail} (${role}):`, emailError.message);
       if (process.env.NODE_ENV === 'development') {
         console.error('Full error:', emailError);
       }
@@ -538,7 +540,7 @@ router.post('/forgot-password', [
 // @access  Public
 router.post('/verify-reset-otp', [
   body('email').isEmail().withMessage('Please provide a valid email'),
-  body('role').isIn(['customer', 'agent']).withMessage('Invalid user role'),
+  body('role').isIn(['customer', 'agent', 'admin']).withMessage('Invalid user role'),
   body('otp').isLength({ min: 6, max: 6 }).withMessage('OTP must be 6 digits')
 ], async (req, res) => {
   try {
@@ -548,8 +550,9 @@ router.post('/verify-reset-otp', [
     }
 
     const { email, role, otp } = req.body;
+    const normalizedEmail = String(email).toLowerCase().trim();
 
-    const user = await User.findOne({ email, role });
+    const user = await User.findOne({ email: normalizedEmail, role });
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
@@ -595,7 +598,7 @@ router.post('/verify-reset-otp', [
 // @access  Public
 router.post('/reset-password', [
   body('email').isEmail().withMessage('Please provide a valid email'),
-  body('role').isIn(['customer', 'agent']).withMessage('Invalid user role'),
+  body('role').isIn(['customer', 'agent', 'admin']).withMessage('Invalid user role'),
   body('resetToken').notEmpty().withMessage('Reset token is required'),
   body('password').isLength({ min: 6 }).withMessage('Password must be at least 6 characters')
 ], async (req, res) => {
@@ -606,12 +609,13 @@ router.post('/reset-password', [
     }
 
     const { email, role, resetToken, password } = req.body;
+    const normalizedEmail = String(email).toLowerCase().trim();
 
     // Hash token to compare with stored hash
     const hashedToken = crypto.createHash('sha256').update(resetToken).digest('hex');
 
     const user = await User.findOne({
-      email,
+      email: normalizedEmail,
       role,
       resetPasswordToken: hashedToken,
       resetPasswordExpire: { $gt: Date.now() }
@@ -621,8 +625,9 @@ router.post('/reset-password', [
       return res.status(400).json({ message: 'Invalid or expired reset session. Please verify OTP again.' });
     }
 
-    // Set new password
-    user.password = password;
+    const bcrypt = require('bcryptjs');
+    const hashedPassword = await bcrypt.hash(password, 10);
+    user.password = hashedPassword;
     if (role === 'agent' || role === 'customer') {
       user.plainPassword = password;
     }

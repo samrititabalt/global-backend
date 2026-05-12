@@ -44,7 +44,7 @@ const mail = async (
 
     // Use custom sender if provided, otherwise get from environment or use default
     const senderEmail = customSenderEmail || process.env.BREVO_SENDER_EMAIL || process.env.EMAIL_USER || process.env.USER_EMAIL;
-    const senderName = customSenderName || process.env.BREVO_SENDER_NAME || 'GlobalCare Support System';
+    const senderName = customSenderName || process.env.BREVO_SENDER_NAME || 'Tabalt Salesforce Team';
 
     if (!senderEmail) {
       throw new Error('BREVO_SENDER_EMAIL (or EMAIL_USER/USER_EMAIL) is required in .env file');
@@ -100,7 +100,7 @@ const mailWithAttachment = async (
     }
 
     const senderEmail = customSenderEmail || process.env.BREVO_SENDER_EMAIL || process.env.EMAIL_USER || process.env.USER_EMAIL;
-    const senderName = customSenderName || process.env.BREVO_SENDER_NAME || 'GlobalCare Support System';
+    const senderName = customSenderName || process.env.BREVO_SENDER_NAME || 'Tabalt Salesforce Team';
 
     if (!senderEmail) {
       throw new Error('BREVO_SENDER_EMAIL (or EMAIL_USER/USER_EMAIL) is required in .env file');
@@ -304,7 +304,7 @@ const sendCredentialsEmail = async (email, password, role, name) => {
           </p>
         </div>
         <div class="footer">
-          <p>&copy; ${new Date().getFullYear()} GlobalCare Support System. All rights reserved.</p>
+          <p>&copy; ${new Date().getFullYear()} ${process.env.BREVO_SENDER_NAME || 'Tabalt Salesforce Team'}. All rights reserved.</p>
           <p style="margin-top: 10px;">
             <a href="${loginUrl}">Visit Our Website</a>
           </p>
@@ -333,6 +333,7 @@ const sendPasswordResetOTPEmail = async (email, name, otpCode, role) => {
   const resetPath = role === 'customer' ? '/customer/reset-password' :
     role === 'agent' ? '/agent/reset-password' :
       '/admin/reset-password';
+  const brandName = process.env.BREVO_SENDER_NAME || 'Tabalt Salesforce Team';
 
   const html = `
     <!DOCTYPE html>
@@ -340,7 +341,7 @@ const sendPasswordResetOTPEmail = async (email, name, otpCode, role) => {
     <head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>Password Reset Code</title>
+      <title>Tabalt — Password reset code</title>
       <style>
         * {
           margin: 0;
@@ -486,7 +487,7 @@ const sendPasswordResetOTPEmail = async (email, name, otpCode, role) => {
           </div>
         </div>
         <div class="footer">
-          <p>&copy; ${new Date().getFullYear()} GlobalCare Support System. All rights reserved.</p>
+          <p>&copy; ${new Date().getFullYear()} ${brandName}. All rights reserved.</p>
         </div>
       </div>
     </body>
@@ -505,11 +506,13 @@ const sendPasswordResetOTPEmail = async (email, name, otpCode, role) => {
     `Reset flow: ${loginUrl}${resetPath}`,
     '',
     'If you did not request this, you can ignore this email.',
+    '',
+    `— ${brandName}`,
   ].join('\n');
 
   const result = await mail(
     email,
-    'Password Reset Verification Code - GlobalCare',
+    'Password Reset Verification Code - Tabalt',
     html,
     null,
     null,
