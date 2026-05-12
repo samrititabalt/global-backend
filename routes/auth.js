@@ -355,7 +355,7 @@ router.get('/me', protect, async (req, res) => {
   try {
     const user = await User.findById(req.user._id)
       .select('-password')
-      .populate('serviceCategory', 'name')
+      .populate('serviceCategory', 'name industryCloud')
       .populate('currentPlan', 'name price tokens');
 
     // Special handling for spbajaj25@gmail.com - return admin role if accessing admin routes
@@ -441,7 +441,7 @@ router.put(
         { new: true, runValidators: true }
       )
         .select('-password')
-        .populate('serviceCategory', 'name')
+        .populate('serviceCategory', 'name industryCloud')
         .populate('currentPlan', 'name price tokens');
 
       res.json({
@@ -461,7 +461,7 @@ router.put(
 // @access  Private
 router.get('/services', protect, async (req, res) => {
   try {
-    const services = await Service.find({ isActive: true }).select('name _id');
+    const services = await Service.find({ isActive: true }).select('name _id industryCloud');
     res.json({ success: true, services });
   } catch (error) {
     console.error('Get services error:', error);

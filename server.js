@@ -9,6 +9,7 @@ const MongoStore = connectMongo.MongoStore || connectMongo.default || connectMon
 const passport = require('passport');
 require('dotenv').config();
 const { ensureDefaultPlans } = require('./utils/planDefaults');
+const { ensureTabaltSalesforceServices } = require('./utils/ensureTabaltSalesforceServices');
 
 const app = express();
 const server = http.createServer(app);
@@ -93,6 +94,11 @@ mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/globalcar
     console.log('Default plans ready');
   } catch (planError) {
     console.error('Failed to seed default plans:', planError.message);
+  }
+  try {
+    await ensureTabaltSalesforceServices();
+  } catch (svcError) {
+    console.error('Tabalt service catalog migration:', svcError.message);
   }
 })
 .catch(err => console.error('MongoDB Connection Error:', err));

@@ -101,11 +101,12 @@ router.post('/services', protect, authorize('admin'), [
       return res.status(400).json({ errors: errors.array() });
     }
 
-    const { name, description, subServices } = req.body;
+    const { name, description, subServices, industryCloud } = req.body;
 
     const service = await Service.create({
       name,
       description,
+      industryCloud: industryCloud || '',
       subServices: subServices || []
     });
 
@@ -184,11 +185,16 @@ router.get('/services', protect, authorize('admin'), async (req, res) => {
 // @access  Private (Admin)
 router.put('/services/:id', protect, authorize('admin'), async (req, res) => {
   try {
-    const { name, description, subServices, isActive } = req.body;
+    const { name, description, subServices, isActive, industryCloud } = req.body;
+
+    const patch = { name, description, subServices, isActive };
+    if (industryCloud !== undefined) {
+      patch.industryCloud = industryCloud;
+    }
 
     const service = await Service.findByIdAndUpdate(
       req.params.id,
-      { name, description, subServices, isActive },
+      patch,
       { new: true, runValidators: true }
     );
 

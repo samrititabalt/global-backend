@@ -9,6 +9,12 @@ const serviceSchema = new mongoose.Schema({
   description: {
     type: String
   },
+  /** Salesforce / Tabalt industry cloud label for assignment context (e.g. Financial Services Cloud). */
+  industryCloud: {
+    type: String,
+    default: '',
+    trim: true
+  },
   subServices: [{
     name: {
       type: String,
