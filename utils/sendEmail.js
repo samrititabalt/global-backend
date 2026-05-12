@@ -1,5 +1,22 @@
 const brevo = require('@getbrevo/brevo');
 
+/** Pull a readable message from Brevo @getbrevo/brevo HttpError (body + status). */
+function formatBrevoSendError(error) {
+  if (!error) return 'Unknown error';
+  const base = error.message || 'Unknown error';
+  const status = error.statusCode != null ? `HTTP ${error.statusCode}` : '';
+  let bodyMsg = '';
+  const body = error.body;
+  if (body != null) {
+    if (typeof body === 'object') {
+      bodyMsg = body.message || body.error || JSON.stringify(body);
+    } else {
+      bodyMsg = String(body);
+    }
+  }
+  return [base, status, bodyMsg].filter(Boolean).join(' — ');
+}
+
 /**
  * Simple email sending function using Brevo API
  * @param {string} receiverEmail - Recipient email address
@@ -40,8 +57,9 @@ const mail = async (receiverEmail, subject, html, customSenderEmail = null, cust
     console.log("Email send successfully :- ", data.messageId);
     return { success: true, messageId: data.messageId };
   } catch (error) {
-    console.error("Error sending email :- ", error.message);
-    return { success: false, error: error.message };
+    const detail = formatBrevoSendError(error);
+    console.error('Error sending email (Brevo):', detail);
+    return { success: false, error: detail };
   }
 };
 
@@ -95,8 +113,9 @@ const mailWithAttachment = async (
     console.log('Email sent with attachment:', data.messageId);
     return { success: true, messageId: data.messageId };
   } catch (error) {
-    console.error('Error sending email with attachment:', error.message);
-    return { success: false, error: error.message };
+    const detail = formatBrevoSendError(error);
+    console.error('Error sending email with attachment (Brevo):', detail);
+    return { success: false, error: detail };
   }
 };
 
