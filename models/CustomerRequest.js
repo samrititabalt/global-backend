@@ -8,6 +8,17 @@ const customerRequestSchema = new mongoose.Schema({
   },
   title: { type: String, required: true },
   shortDescription: { type: String, default: '' },
+  /** Salesforce catalog selection (optional; aligns with Manage Services). */
+  salesforceService: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Service',
+    default: null,
+  },
+  salesforceServiceName: { type: String, default: '' },
+  industryCloud: { type: String, default: '' },
+  selectedPersona: { type: String, default: '' },
+  /** catalog = matched persona; custom = net-new use case */
+  requestKind: { type: String, enum: ['catalog', 'custom'], default: 'custom' },
   expectedBudget: { type: Number, required: true }, // minutes
   expectedDeadline: { type: String, default: '' },
   deliverableFormat: { type: String, default: '' },

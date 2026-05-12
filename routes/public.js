@@ -4,7 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const Plan = require('../models/Plan');
 const { ensureDefaultPlans, formatPlanForResponse } = require('../utils/planDefaults');
-const mail = require('../utils/sendEmail');
+const { mail, getTabaltOpsNotifyEmail } = require('../utils/sendEmail');
 const { generateAIResponse } = require('../services/openaiService');
 const Lead = require('../models/Lead');
 const Activity = require('../models/Activity');
@@ -149,51 +149,61 @@ router.post('/chatbot-message', async (req, res) => {
       }).catch(err => console.error('Error creating activity (non-blocking):', err));
     }, 0);
 
-    // Send email notification to owner (completely non-blocking - use setTimeout to defer)
+    const escH = (s) =>
+      String(s || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/\n/g, '<br/>');
+
+    // Send email notification to ops (non-blocking) — full transcript + this turn
     setTimeout(() => {
       try {
-        const emailSubject = 'New Chatbot Interaction - Tabalt Website';
-        const safeMessage = String(message).trim().replace(/\n/g, '<br>');
+        const ops = getTabaltOpsNotifyEmail();
+        const { visitorContact } = req.body || {};
+        const emailSubject = 'Tabalt chatbot — visitor turn (full transcript attached in body)';
+        const fullHistory = Array.isArray(chatHistory) ? chatHistory : [];
+        const lines = [
+          '<h3 style="margin:0 0 12px;">Conversation history</h3>',
+        ];
+        fullHistory.forEach((msg) => {
+          if (!msg || !msg.text) return;
+          const who = msg.sender === 'user' ? 'Visitor' : 'Tabalt';
+          lines.push(`<p style="margin:6px 0;"><strong>${who}:</strong> ${escH(msg.text)}</p>`);
+        });
+        lines.push(`<p style="margin:6px 0;"><strong>Visitor (this message):</strong> ${escH(message)}</p>`);
+        lines.push(`<p style="margin:6px 0;"><strong>Tabalt (AI reply):</strong> ${escH(aiResponse)}</p>`);
+        const contactBlock =
+          visitorContact && (visitorContact.email || visitorContact.phone)
+            ? `<div style="background:#eef6ff;padding:12px;margin:12px 0;border-radius:6px;">
+                <p style="margin:0 0 6px;"><strong>Known contact (if any)</strong></p>
+                <p style="margin:2px 0;">Email: ${escH(visitorContact.email || '')}</p>
+                <p style="margin:2px 0;">Phone: ${escH(visitorContact.phone || '')}</p>
+                <p style="margin:2px 0;">Name: ${escH(visitorContact.name || '')}</p>
+                <p style="margin:2px 0;">Company: ${escH(visitorContact.company || '')}</p>
+              </div>`
+            : '';
         const emailContent = `
           <!DOCTYPE html>
           <html>
-            <head>
-              <meta charset="UTF-8">
-              <style>
-                body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
-                .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-                .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; border-radius: 5px 5px 0 0; }
-                .content { background: white; padding: 20px; border: 1px solid #ddd; }
-                .message-box { background: #f5f5f5; padding: 15px; margin: 15px 0; border-radius: 5px; border-left: 4px solid #667eea; }
-                .footer { background: #f5f5f5; padding: 15px; text-align: center; font-size: 12px; color: #666; border-radius: 0 0 5px 5px; }
-              </style>
-            </head>
-            <body>
-              <div class="container">
-                <div class="header">
-                  <h2>New Chatbot Interaction</h2>
+            <head><meta charset="UTF-8"></head>
+            <body style="font-family:Arial,sans-serif;line-height:1.5;color:#333;">
+              <div style="max-width:720px;margin:0 auto;padding:16px;">
+                <h2 style="margin:0 0 8px;">Chatbot activity</h2>
+                <p style="margin:0 0 12px;">A visitor used the homepage chatbot. Below is the full client-provided history for this request, plus the latest user message and AI reply.</p>
+                ${contactBlock}
+                <div style="background:#f8f8f8;padding:14px;border-radius:8px;border-left:4px solid #667eea;">
+                  ${lines.join('')}
                 </div>
-                <div class="content">
-                  <p>A visitor on the Tabalt website has interacted with the chatbot.</p>
-                  <div class="message-box">
-                    <p><strong>Visitor Message:</strong></p>
-                    <p>${safeMessage}</p>
-                    <p style="margin-top: 10px; font-size: 12px; color: #666;">
-                      <strong>Timestamp:</strong> ${new Date().toLocaleString()}
-                    </p>
-                  </div>
-                </div>
-                <div class="footer">
-                  <p>This is an automated email from the Tabalt website chat bot.</p>
-                </div>
+                <p style="font-size:12px;color:#666;margin-top:16px;">Timestamp: ${new Date().toLocaleString()}</p>
               </div>
             </body>
           </html>
         `;
-        
-        mail('spbajaj25@gmail.com', emailSubject, emailContent)
-          .then(() => console.log('Chatbot interaction email sent'))
-          .catch(err => console.error('Error sending chatbot interaction email (non-blocking):', err));
+
+        mail(ops, emailSubject, emailContent)
+          .then(() => console.log('Chatbot interaction email sent to', ops))
+          .catch((err) => console.error('Error sending chatbot interaction email (non-blocking):', err));
       } catch (emailError) {
         console.error('Error in email sending (non-blocking):', emailError);
       }
@@ -279,7 +289,7 @@ router.post('/send-contact-info', async (req, res) => {
       </html>
     `;
 
-    const result = await mail('spbajaj25@gmail.com', subject, htmlContent);
+    const result = await mail(getTabaltOpsNotifyEmail(), subject, htmlContent);
 
     // Save lead to CRM database
     try {

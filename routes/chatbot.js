@@ -8,12 +8,12 @@ const User = require('../models/User');
 const HiringEmployee = require('../models/HiringEmployee');
 const generateToken = require('../utils/jwtToken');
 const { generateAIResponse } = require('../services/openaiService');
-const mail = require('../utils/sendEmail');
+const { mail, getTabaltOpsNotifyEmail } = require('../utils/sendEmail');
 const { isValidAccessCode } = require('../services/accessCodeService');
 
 // Track email failures for admin alerts
 const emailFailureCounts = new Map();
-const ADMIN_EMAIL = 'spbajaj25@gmail.com';
+const ADMIN_EMAIL = getTabaltOpsNotifyEmail();
 const FRONTEND_URL = process.env.FRONTEND_URL || 'https://mainproduct.vercel.app';
 const HIRING_TOKEN_TYPE = 'hiring-pro';
 const signHiringToken = (payload) => jwt.sign(

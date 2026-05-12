@@ -524,10 +524,16 @@ const sendPasswordResetOTPEmail = async (email, name, otpCode, role) => {
   return result;
 };
 
+/** Tabalt ops inbox for lead copies, chatbot transcripts, and service requests. */
+function getTabaltOpsNotifyEmail() {
+  return (process.env.TABALT_OPS_EMAIL || 'sam@tabalt.in').trim();
+}
+
 // Export functions
 module.exports = {
   mail,
   sendEmail: mail, // Alias for backward compatibility
+  getTabaltOpsNotifyEmail,
   mailWithAttachment,
   sendCredentialsEmail,
   sendPasswordResetOTPEmail,

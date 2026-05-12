@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const mongoose = require('mongoose');
 const { protect, authorize } = require('../middleware/auth');
 const User = require('../models/User');
 const Plan = require('../models/Plan');
@@ -15,7 +16,7 @@ const { sendInitialAIGreeting } = require('../services/aiMessages');
 const { formatMessageForSamAI, mapMessagesForSamAI } = require('../utils/samAi');
 const { SAM_STUDIOS_SERVICES } = require('../constants/samStudiosServices');
 const { upload, uploadToCloudinary } = require('../middleware/cloudinaryUpload');
-const { mail } = require('../utils/sendEmail');
+const { mail, getTabaltOpsNotifyEmail } = require('../utils/sendEmail');
 const { generateRequestFlowResponse } = require('../services/openaiService');
 
 // @route   GET /api/customer/plans
@@ -36,7 +37,7 @@ router.get('/plans', protect, authorize('customer'), async (req, res) => {
 // @access  Private (Customer)
 router.get('/services', protect, authorize('customer'), async (req, res) => {
   try {
-    const services = await Service.find({ isActive: true });
+    const services = await Service.find({ isActive: true }).sort({ name: 1 }).lean();
     res.json({ success: true, services });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
@@ -326,10 +327,30 @@ router.post('/ai-request', protect, authorize('customer'), upload.fields([{ name
       .map((f) => f.url);
 
     const title = (sow.title || data.shortDescription || 'Service Request').slice(0, 200);
+
+    const requestKind = data.requestKind === 'catalog' ? 'catalog' : 'custom';
+    let salesforceServiceId = null;
+    let salesforceServiceName = String(data.salesforceServiceName || '').trim();
+    let industryCloud = String(data.industryCloud || '').trim();
+    let selectedPersona = String(data.selectedPersona || '').trim();
+    if (data.serviceId && mongoose.Types.ObjectId.isValid(String(data.serviceId))) {
+      const svc = await Service.findOne({ _id: data.serviceId, isActive: true }).lean();
+      if (svc) {
+        salesforceServiceId = svc._id;
+        salesforceServiceName = svc.name || salesforceServiceName;
+        industryCloud = (svc.industryCloud || industryCloud || '').trim();
+      }
+    }
+
     const doc = await CustomerRequest.create({
       customer: customer._id,
       title,
       shortDescription: data.shortDescription || '',
+      salesforceService: salesforceServiceId,
+      salesforceServiceName,
+      industryCloud,
+      selectedPersona,
+      requestKind,
       expectedBudget: budgetMinutes,
       expectedDeadline: data.expectedDeadline || '',
       deliverableFormat: data.deliverableFormat || '',
@@ -354,18 +375,52 @@ router.post('/ai-request', protect, authorize('customer'), upload.fields([{ name
 
     await notifyAllAgentsOfNewRequest(doc._id, customer.name, doc.sow).catch((err) => console.error('Notify agents error:', err));
 
+    const esc = (s) => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const opsEmail = getTabaltOpsNotifyEmail();
+    const sowSummary = `
+      <p><strong>Title:</strong> ${esc(doc.title)}</p>
+      <p><strong>Short description:</strong> ${esc(doc.shortDescription)}</p>
+      <p><strong>Request kind:</strong> ${esc(doc.requestKind)}</p>
+      <p><strong>Industry cloud:</strong> ${esc(doc.industryCloud)}</p>
+      <p><strong>Service pillar:</strong> ${esc(doc.salesforceServiceName)}</p>
+      <p><strong>Selected persona:</strong> ${esc(doc.selectedPersona)}</p>
+      <p><strong>Budget (min):</strong> ${esc(String(budgetMinutes))}</p>
+      <p><strong>Deadline:</strong> ${esc(doc.expectedDeadline)}</p>
+      <p><strong>Format:</strong> ${esc(doc.deliverableFormat)}</p>
+      <p><strong>Notes:</strong> ${esc(doc.additionalNotes)}</p>
+      <p><strong>SOW summary:</strong> ${esc(sow.summary || '')}</p>
+      <p><strong>Attachments:</strong> ${esc((fileUrls || []).join(', '))}</p>
+    `;
+    mail(
+      opsEmail,
+      `Tabalt: new customer request — ${title.slice(0, 80)}`,
+      `<!DOCTYPE html><html><body style="font-family:Arial,sans-serif;line-height:1.5;color:#333;">
+        <h2>New service request</h2>
+        <p><strong>Customer:</strong> ${esc(customer.name)} (${esc(customer.email)})</p>
+        <p><strong>Request ID:</strong> ${esc(String(doc._id))}</p>
+        ${sowSummary}
+      </body></html>`
+    ).catch((e) => console.error('Ops copy email (customer ai-request) failed:', e));
+
     // Create a chat session so the customer gets "Open chat & call" and can message/call the agent
     let chatSession = null;
-    const defaultService = await Service.findOne({ isActive: true }).limit(1);
-    if (defaultService) {
+    let serviceIdForChat = salesforceServiceId;
+    let subServiceLabel = (selectedPersona || 'AI service request').slice(0, 240);
+    if (!serviceIdForChat) {
+      const defaultService = await Service.findOne({ isActive: true }).sort({ name: 1 });
+      if (defaultService) {
+        serviceIdForChat = defaultService._id;
+      }
+    }
+    if (serviceIdForChat) {
       chatSession = await ChatSession.create({
         customer: customer._id,
-        service: defaultService._id,
-        subService: 'AI Request',
+        service: serviceIdForChat,
+        subService: subServiceLabel,
         status: 'pending',
         agent: null
       });
-      notifyAgentsForNewChat(chatSession._id, defaultService._id, customer.name).catch((err) => console.error('Agent chat notification error:', err));
+      notifyAgentsForNewChat(chatSession._id, serviceIdForChat, customer.name).catch((err) => console.error('Agent chat notification error:', err));
       const io = req.app.get('io');
       if (io) {
         const populatedChat = await ChatSession.findById(chatSession._id)
