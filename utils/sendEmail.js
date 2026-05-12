@@ -22,9 +22,19 @@ function formatBrevoSendError(error) {
  * @param {string} receiverEmail - Recipient email address
  * @param {string} subject - Email subject
  * @param {string} html - Email HTML content
+ * @param {string|null} customSenderEmail
+ * @param {string|null} customSenderName
+ * @param {string|null} textContent - Optional plain-text body (improves deliverability vs HTML-only)
  * @returns {Promise<{success: boolean, messageId?: string, error?: string}>}
  */
-const mail = async (receiverEmail, subject, html, customSenderEmail = null, customSenderName = null) => {
+const mail = async (
+  receiverEmail,
+  subject,
+  html,
+  customSenderEmail = null,
+  customSenderName = null,
+  textContent = null
+) => {
   try {
     const brevoApiKey = process.env.BREVO_API_KEY;
 
@@ -48,6 +58,9 @@ const mail = async (receiverEmail, subject, html, customSenderEmail = null, cust
     const sendSmtpEmail = new brevo.SendSmtpEmail();
     sendSmtpEmail.subject = subject;
     sendSmtpEmail.htmlContent = html;
+    if (textContent) {
+      sendSmtpEmail.textContent = textContent;
+    }
     sendSmtpEmail.sender = { name: senderName, email: senderEmail };
     sendSmtpEmail.to = [{ email: receiverEmail }];
 
@@ -480,7 +493,28 @@ const sendPasswordResetOTPEmail = async (email, name, otpCode, role) => {
     </html>
   `;
 
-  const result = await mail(email, 'Password Reset Verification Code - GlobalCare', html);
+  const textBody = [
+    `Hello ${name},`,
+    '',
+    'We received a request to reset your password. Your verification code is:',
+    '',
+    otpCode,
+    '',
+    'This code expires in 5 minutes.',
+    '',
+    `Reset flow: ${loginUrl}${resetPath}`,
+    '',
+    'If you did not request this, you can ignore this email.',
+  ].join('\n');
+
+  const result = await mail(
+    email,
+    'Password Reset Verification Code - GlobalCare',
+    html,
+    null,
+    null,
+    textBody
+  );
   if (!result.success) {
     throw new Error(result.error || 'Failed to send OTP email');
   }

@@ -504,8 +504,10 @@ router.post('/forgot-password', [
     try {
       console.log(`📧 Sending password reset OTP to ${email} (${role})...`);
       const { sendPasswordResetOTPEmail } = require('../utils/sendEmail');
-      await sendPasswordResetOTPEmail(email, user.name, otpCode, role);
-      console.log(`✅ Password reset OTP sent successfully to ${email}`);
+      const emailResult = await sendPasswordResetOTPEmail(email, user.name, otpCode, role);
+      console.log(
+        `✅ Password reset OTP accepted by Brevo for ${email} (${role}); messageId=${emailResult?.messageId || 'n/a'} — check Brevo Transactional logs if inbox is empty`
+      );
     } catch (emailError) {
       console.error(`❌ Password reset OTP email failure for ${email} (${role}):`, emailError.message);
       if (process.env.NODE_ENV === 'development') {
