@@ -8,9 +8,13 @@
  *
  * Design choices:
  *   - Reuses `getOpenAIClient` from `services/openaiService.js` so every feature uses the same API layer.
- *   - The model is read from the same global env used by the rest of the app:
- *       OPENAI_MODEL || 'gpt-4o-mini'
+ *   - The model defaults to gpt-5 because resume tailoring benefits from a reasoning-class
+ *     model. It can be overridden via env var:
+ *       OPENAI_RESUME_TAILOR_MODEL || 'gpt-5'
  *     Switching model later = config change only, no code change.
+ *   - For reasoning models (gpt-5*, o1*, o3*, o4*) we automatically swap `max_tokens` for
+ *     `max_completion_tokens` and drop `temperature`, since those models reject the legacy
+ *     params.
  *   - Truthfulness guardrails are baked into the system prompt; we instruct the model never to invent
  *     companies, dates, titles, certifications, achievements, or projects.
  *   - The structured JSON shape is identical for parsed and tailored resumes so the downstream DOCX
@@ -34,7 +38,8 @@ Convert the supplied raw resume text into a strict JSON object with this exact s
     "links": [{"label": string, "url": string}]
   },
   "summary": string | null,
-  "skills": string[],
+  "skills": string[]
+            | { "category": string, "items": string[] }[],
   "experience": [
     {
       "company": string,
@@ -67,6 +72,11 @@ Convert the supplied raw resume text into a strict JSON object with this exact s
 
 Rules:
 - Reproduce facts exactly as in the source. Do not invent any data.
+- For "skills": if the source resume groups skills under category headings (e.g. "Sales & BD",
+  "Technical Skills", "Cloud Platforms"), return them as a categorised array:
+    [{ "category": "Sales & BD", "items": ["Net New Business Dev", "Pipeline Generation"] }, ...]
+  If the source lists skills as a single flat block, return a flat string[] instead.
+  Prefer 3–4 categories with 3–6 items each when categorisation is reasonable.
 - "sectionOrder" must list the section keys in the order they appeared in the source resume,
   using only these keys: "summary", "skills", "experience", "projects", "education", "certifications".
 - Omit a section from "sectionOrder" if not present.
@@ -92,6 +102,10 @@ CRITICAL RULES (truthfulness — non-negotiable):
   by reordering them or trimming low-value bullets.
 - Preserve the candidate's identity (name, contact, email, phone, location, links) exactly.
 - Preserve the original "sectionOrder".
+- Preserve the original "skills" structure: if ORIGINAL_RESUME has categorised skills
+  ([{category, items}]), keep the same categories and only re-order/swap items inside them
+  to better fit the JD. If ORIGINAL_RESUME has flat skills (string[]), return flat skills.
+  Do not add new skill categories that did not exist in the source.
 - Keep the tone professional and concise. Each bullet under 28 words. Aim for an output that fits on
   one A4 page when typeset at 10–11pt — that means roughly:
     * summary: 2–3 sentences
@@ -157,7 +171,15 @@ function inferStyleHintsFromHtml(html) {
 }
 
 function getResumeTailorModel() {
-  return process.env.OPENAI_MODEL || 'gpt-4o-mini'
+  return process.env.OPENAI_RESUME_TAILOR_MODEL || 'gpt-5'
+}
+
+function isReasoningModel(model) {
+  const m = String(model || '').toLowerCase()
+  if (m.startsWith('gpt-5-chat')) return false // gpt-5-chat-latest accepts legacy params
+  if (m.startsWith('gpt-5')) return true
+  if (m.startsWith('o1') || m.startsWith('o3') || m.startsWith('o4')) return true
+  return false
 }
 
 function sanitizeOpenAIError(error) {
@@ -203,15 +225,25 @@ async function callJsonCompletion({ system, user, maxTokens = 2200, temperature 
   }
 
   const model = getResumeTailorModel()
+  const reasoning = isReasoningModel(model)
+
   const requestBody = {
     model,
     messages: [
       { role: 'system', content: system },
       { role: 'user', content: user },
     ],
-    temperature,
-    max_tokens: maxTokens,
   }
+
+  if (reasoning) {
+    // gpt-5 / o-series: reasoning tokens count toward the budget, so be generous.
+    requestBody.max_completion_tokens = Math.max(maxTokens * 2, 4000)
+    // temperature, top_p, presence_penalty, frequency_penalty are all rejected; omit them.
+  } else {
+    requestBody.max_tokens = maxTokens
+    requestBody.temperature = temperature
+  }
+
   if (/gpt-4o|gpt-4-turbo|gpt-4\.1|gpt-5/i.test(model)) {
     requestBody.response_format = { type: 'json_object' }
   }
@@ -317,7 +349,7 @@ function normalizeParsedResume(input, sourceText = '') {
         : [],
     },
     summary: stringOrNull(safe.summary),
-    skills: Array.isArray(safe.skills) ? safe.skills.filter(Boolean).map((s) => String(s).trim()) : [],
+    skills: normalizeSkills(safe.skills),
     experience: Array.isArray(safe.experience)
       ? safe.experience.map((entry) => ({
           company: stringOrEmpty(entry?.company),
@@ -508,6 +540,32 @@ function splitResumeIntoSections(lines) {
   })
 
   return sections
+}
+
+function normalizeSkills(input) {
+  if (!Array.isArray(input)) return []
+  if (input.length === 0) return []
+
+  const looksGrouped = input.some(
+    (item) => item && typeof item === 'object' && !Array.isArray(item) && (item.items || item.category)
+  )
+
+  if (looksGrouped) {
+    const groups = input
+      .map((item) => {
+        if (!item || typeof item !== 'object') return null
+        const category = stringOrEmpty(item.category)
+        const items = Array.isArray(item.items)
+          ? item.items.filter(Boolean).map((x) => String(x).trim()).filter(Boolean)
+          : []
+        if (items.length === 0) return null
+        return { category, items }
+      })
+      .filter(Boolean)
+    if (groups.length > 0) return groups
+  }
+
+  return input.filter(Boolean).map((s) => String(s).trim()).filter(Boolean)
 }
 
 function stringOrEmpty(value) {
