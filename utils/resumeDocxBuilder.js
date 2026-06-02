@@ -338,7 +338,7 @@ function renderSkills(skills, ctx) {
           (c) =>
             new TableCell({
               width: { size: colWidth, type: WidthType.PERCENTAGE },
-              shading: { type: ShadingType.SOLID, color: 'auto', fill: ctx.headerFill },
+              shading: { type: ShadingType.CLEAR, color: 'auto', fill: ctx.headerFill },
               margins: { top: 80, bottom: 80, left: 100, right: 100 },
               children: [
                 new Paragraph({
@@ -368,7 +368,7 @@ function renderSkills(skills, ctx) {
           (c) =>
             new TableCell({
               width: { size: colWidth, type: WidthType.PERCENTAGE },
-              shading: { type: ShadingType.SOLID, color: 'auto', fill: ctx.cellFill },
+              shading: { type: ShadingType.CLEAR, color: 'auto', fill: ctx.cellFill },
               margins: { top: 40, bottom: 40, left: 100, right: 100 },
               children: [
                 new Paragraph({
