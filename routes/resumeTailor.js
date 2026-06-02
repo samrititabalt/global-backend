@@ -16,8 +16,8 @@
  *     matching the pattern of every other admin-only route in the project.
  *   - File upload uses multer memory storage so we never persist resume files to disk; everything
  *     happens in-memory within the request lifetime.
- *   - The AI model is read from `getResumeTailorModel()` which respects
- *     OPENAI_RESUME_TAILOR_MODEL || OPENAI_MODEL || 'gpt-4o-mini' — switch model = config change only.
+ *   - The AI model is read from `getResumeTailorModel()` which follows the same app-wide
+ *     OPENAI_MODEL || 'gpt-4o-mini' config used by the rest of the project.
  */
 
 const express = require('express')
@@ -202,7 +202,7 @@ router.post(
             index: i,
             jobNumber: i + 1,
             status: 'failed',
-            error: item.error?.message || 'AI failed for this job description.',
+            error: safePublicGenerationError(item.error),
           })
           continue
         }
@@ -281,6 +281,20 @@ function uniqueFileName(usedNames, candidateName, roleSlug, fallbackIdx) {
   }
   usedNames.add(candidate)
   return candidate
+}
+
+function safePublicGenerationError(error) {
+  const message = error?.message || ''
+  if (/openai rejected|api key|401|invalid_api_key/i.test(message)) {
+    return 'OpenAI is not accepting the configured API key on the backend. Please check Render environment variable OPENAI_API_KEY.'
+  }
+  if (/rate limit|429/i.test(message)) {
+    return 'OpenAI rate limit reached. Please wait a minute and try again.'
+  }
+  if (/temporarily unavailable|5\d\d/i.test(message)) {
+    return 'OpenAI is temporarily unavailable. Please try again shortly.'
+  }
+  return message || 'AI failed for this job description.'
 }
 
 module.exports = router

@@ -8,8 +8,8 @@
  *
  * Design choices:
  *   - Reuses `getOpenAIClient` from `services/openaiService.js` so every feature uses the same API layer.
- *   - The model is read from env at call-time, with a feature-specific override:
- *       OPENAI_RESUME_TAILOR_MODEL || OPENAI_MODEL || 'gpt-4o-mini'
+ *   - The model is read from the same global env used by the rest of the app:
+ *       OPENAI_MODEL || 'gpt-4o-mini'
  *     Switching model later = config change only, no code change.
  *   - Truthfulness guardrails are baked into the system prompt; we instruct the model never to invent
  *     companies, dates, titles, certifications, achievements, or projects.
@@ -157,11 +157,26 @@ function inferStyleHintsFromHtml(html) {
 }
 
 function getResumeTailorModel() {
-  return (
-    process.env.OPENAI_RESUME_TAILOR_MODEL ||
-    process.env.OPENAI_MODEL ||
-    'gpt-4o-mini'
-  )
+  return process.env.OPENAI_MODEL || 'gpt-4o-mini'
+}
+
+function sanitizeOpenAIError(error) {
+  const status = error?.status || error?.response?.status
+  const code = error?.code || error?.type
+
+  if (status === 401 || code === 'invalid_api_key' || /api key/i.test(error?.message || '')) {
+    return new Error('OpenAI rejected the configured API key. Please check OPENAI_API_KEY in Render.')
+  }
+
+  if (status === 429) {
+    return new Error('OpenAI rate limit reached. Please wait a minute and try again.')
+  }
+
+  if (status >= 500) {
+    return new Error('OpenAI is temporarily unavailable. Please try again shortly.')
+  }
+
+  return new Error(error?.message || 'OpenAI request failed.')
 }
 
 function safeJsonParse(text) {
@@ -201,12 +216,16 @@ async function callJsonCompletion({ system, user, maxTokens = 2200, temperature 
     requestBody.response_format = { type: 'json_object' }
   }
 
-  const completion = await client.chat.completions.create(requestBody)
+  let completion
+  try {
+    completion = await client.chat.completions.create(requestBody)
+  } catch (error) {
+    throw sanitizeOpenAIError(error)
+  }
+
   const raw = completion.choices?.[0]?.message?.content?.trim() || ''
   const parsed = safeJsonParse(raw)
-  if (!parsed) {
-    throw new Error('AI returned a non-JSON or empty response.')
-  }
+  if (!parsed) throw new Error('AI returned a non-JSON or empty response.')
   return parsed
 }
 
