@@ -215,13 +215,18 @@ async function callJsonCompletion({ system, user, maxTokens = 2200, temperature 
  */
 async function parseResumeWithAI(rawText) {
   const userPrompt = `Raw resume text:\n\n${rawText.slice(0, 18000)}`
-  const parsed = await callJsonCompletion({
-    system: RESUME_PARSE_SYSTEM_PROMPT,
-    user: userPrompt,
-    maxTokens: 2400,
-    temperature: 0.1,
-  })
-  return normalizeParsedResume(parsed)
+  try {
+    const parsed = await callJsonCompletion({
+      system: RESUME_PARSE_SYSTEM_PROMPT,
+      user: userPrompt,
+      maxTokens: 3600,
+      temperature: 0.1,
+    })
+    return normalizeParsedResume(parsed, rawText)
+  } catch (error) {
+    console.warn('[ResumeTailor] AI resume parsing failed; using deterministic fallback parser:', error?.message)
+    return buildParsedResumeFallback(rawText)
+  }
 }
 
 /**
@@ -233,6 +238,9 @@ async function tailorResumeForJob({ parsedResume, jobDescription, index }) {
 
   const userPrompt = `ORIGINAL_RESUME:
 ${JSON.stringify(parsedResume)}
+
+ORIGINAL_RESUME_RAW_TEXT:
+${String(parsedResume.sourceText || '').slice(0, 18000)}
 
 JOB_DESCRIPTION:
 ${trimmedJd}
@@ -264,7 +272,7 @@ Return the tailored resume JSON now.`
   }
 }
 
-function normalizeParsedResume(input) {
+function normalizeParsedResume(input, sourceText = '') {
   const safe = input && typeof input === 'object' ? input : {}
   const contact = safe.contact && typeof safe.contact === 'object' ? safe.contact : {}
   const allowedSections = ['summary', 'skills', 'experience', 'projects', 'education', 'certifications']
@@ -325,7 +333,162 @@ function normalizeParsedResume(input) {
       ? safe.certifications.filter(Boolean).map((c) => String(c).trim())
       : [],
     sectionOrder,
+    sourceText: stringOrEmpty(sourceText || safe.sourceText),
   }
+}
+
+function buildParsedResumeFallback(rawText) {
+  const text = stringOrEmpty(rawText)
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+
+  const contact = extractFallbackContact(lines)
+  const sections = splitResumeIntoSections(lines)
+
+  const skillsText = sections.skills.join(' ')
+  const skills = skillsText
+    .split(/[,|•·;]+/)
+    .map((item) => item.trim())
+    .filter((item) => item.length > 1)
+    .slice(0, 30)
+
+  const summary = sections.summary.length
+    ? sections.summary.join(' ').slice(0, 900)
+    : lines.slice(1, 5).join(' ').slice(0, 900) || null
+
+  const experienceBullets = sections.experience.length
+    ? sections.experience
+    : lines.filter((line) => /^[•\-*–]\s+/.test(line)).map((line) => line.replace(/^[•\-*–]\s+/, ''))
+
+  const projects = sections.projects.length
+    ? [
+        {
+          name: 'Projects',
+          role: null,
+          period: null,
+          bullets: sections.projects.slice(0, 8),
+        },
+      ]
+    : []
+
+  const education = sections.education.length
+    ? [
+        {
+          school: sections.education[0],
+          degree: sections.education.slice(1).join(' ') || null,
+          period: null,
+          details: null,
+        },
+      ]
+    : []
+
+  const certifications = sections.certifications.slice(0, 12)
+
+  const sectionOrder = []
+  if (summary) sectionOrder.push('summary')
+  if (skills.length) sectionOrder.push('skills')
+  if (experienceBullets.length) sectionOrder.push('experience')
+  if (projects.length) sectionOrder.push('projects')
+  if (education.length) sectionOrder.push('education')
+  if (certifications.length) sectionOrder.push('certifications')
+
+  return normalizeParsedResume(
+    {
+      contact,
+      summary,
+      skills,
+      experience: experienceBullets.length
+        ? [
+            {
+              company: 'Experience',
+              role: contact.title || 'Professional Experience',
+              location: null,
+              start: null,
+              end: null,
+              bullets: experienceBullets.slice(0, 16),
+            },
+          ]
+        : [],
+      projects,
+      education,
+      certifications,
+      sectionOrder,
+    },
+    text
+  )
+}
+
+function extractFallbackContact(lines) {
+  const joined = lines.slice(0, 12).join(' | ')
+  const email = joined.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0] || null
+  const phone = joined.match(/(?:\+?\d[\d\s().-]{7,}\d)/)?.[0]?.trim() || null
+  const links = []
+  const linkRegex = /(https?:\/\/[^\s|]+|(?:linkedin\.com|github\.com|portfolio\.|www\.)[^\s|]+)/gi
+  let match
+  while ((match = linkRegex.exec(joined))) {
+    const url = match[0]
+    links.push({ label: url, url: url.startsWith('http') ? url : `https://${url}` })
+  }
+
+  const name =
+    lines.find((line) => {
+      if (email && line.includes(email)) return false
+      if (phone && line.includes(phone)) return false
+      if (line.length > 80) return false
+      return /[A-Za-z]/.test(line)
+    }) || 'Candidate'
+
+  const title =
+    lines
+      .slice(0, 8)
+      .find((line) => line !== name && !line.includes('@') && line.length <= 90) || null
+
+  return {
+    name,
+    title,
+    email,
+    phone,
+    location: null,
+    links,
+  }
+}
+
+function splitResumeIntoSections(lines) {
+  const sections = {
+    summary: [],
+    skills: [],
+    experience: [],
+    projects: [],
+    education: [],
+    certifications: [],
+  }
+  let current = 'summary'
+
+  const headingToSection = (line) => {
+    const normal = line.toLowerCase().replace(/[^a-z ]/g, ' ').replace(/\s+/g, ' ').trim()
+    if (/^(profile|summary|professional summary|career summary|about)$/.test(normal)) return 'summary'
+    if (/^(skills|technical skills|core skills|key skills|competencies)$/.test(normal)) return 'skills'
+    if (/^(experience|work experience|professional experience|employment history|career history)$/.test(normal)) return 'experience'
+    if (/^(projects|key projects|project experience)$/.test(normal)) return 'projects'
+    if (/^(education|academic|academics|qualifications)$/.test(normal)) return 'education'
+    if (/^(certifications|certificates|licenses|licences)$/.test(normal)) return 'certifications'
+    return null
+  }
+
+  lines.forEach((line) => {
+    const nextSection = headingToSection(line)
+    if (nextSection) {
+      current = nextSection
+      return
+    }
+
+    if (!sections[current]) current = 'summary'
+    sections[current].push(line.replace(/^[•\-*–]\s+/, '').trim())
+  })
+
+  return sections
 }
 
 function stringOrEmpty(value) {
@@ -353,4 +516,5 @@ module.exports = {
   tailorResumeForJob,
   getResumeTailorModel,
   slugifyRole,
+  buildParsedResumeFallback,
 }
