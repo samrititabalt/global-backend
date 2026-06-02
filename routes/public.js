@@ -487,6 +487,20 @@ router.get('/active-homepage', async (req, res) => {
   }
 });
 
+// @route   GET /api/public/samstudios-site-status
+// @desc    Site status for samstudios.uk (live | maintenance). Default: maintenance.
+// @access  Public
+router.get('/samstudios-site-status', async (req, res) => {
+  try {
+    const value = await SiteSetting.get('samstudios_site_status', 'maintenance');
+    const status = value === 'live' ? 'live' : 'maintenance';
+    res.json({ status });
+  } catch (error) {
+    console.error('[Public API] Error getting samstudios site status:', error);
+    res.json({ status: 'maintenance' });
+  }
+});
+
 // @route   GET /api/public/homepage-video
 // @desc    Check if homepage video exists (public endpoint for Home page)
 // @access  Public

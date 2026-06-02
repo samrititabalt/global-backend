@@ -2724,6 +2724,33 @@ router.put('/active-homepage', protect, authorize('admin'), async (req, res) => 
   }
 });
 
+// @route   GET /api/admin/samstudios-site-status
+// @desc    Read current samstudios.uk site status (live | maintenance)
+// @access  Private (Admin)
+router.get('/samstudios-site-status', protect, authorize('admin'), async (req, res) => {
+  try {
+    const value = await SiteSetting.get('samstudios_site_status', 'maintenance');
+    const status = value === 'live' ? 'live' : 'maintenance';
+    res.json({ success: true, status });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// @route   PUT /api/admin/samstudios-site-status
+// @desc    Flip samstudios.uk between live and maintenance
+// @access  Private (Admin)
+router.put('/samstudios-site-status', protect, authorize('admin'), async (req, res) => {
+  try {
+    const { status } = req.body;
+    const value = status === 'live' ? 'live' : 'maintenance';
+    await SiteSetting.set('samstudios_site_status', value);
+    res.json({ success: true, status: value });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
 // ========== SITE MEDIA (Cloudinary images for use anywhere on site) ==========
 
 const MEDIA_KEYS = ['homepage_logo', 'hero_image', 'footer_logo', 'favicon'];
