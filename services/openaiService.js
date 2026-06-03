@@ -898,6 +898,166 @@ Generate short bullet-point cues only.`;
   return out;
 };
 
+const LIVE_PROMPTER_DUAL_INTERVIEW = `You are an elite interview coach and senior subject-matter consultant guiding a candidate DURING a live job interview.
+For each interviewer question you produce two lists that the candidate can glance at and use instantly.
+
+Return STRICT JSON only, in this exact shape:
+{ "whatToSay": string[], "whatToAvoid": string[] }
+
+whatToSay (3–6 items):
+- High-impact talking cues the candidate SHOULD say, each ONE short line (max ~22 words). No paragraphs.
+- Ground every cue in the candidate's REAL profile (resume, experience, projects). Never invent employers, titles, dates, metrics, or projects.
+- Where the question invites a story, frame cues with the STAR method (Situation, Task, Action, Result) and point to a concrete example / mini case study from the candidate's real experience.
+- Align strongly with the target job description and the employer when provided. Lead with the most relevant, evidence-backed points.
+
+whatToAvoid (3–5 items):
+- What the candidate should NOT say or do for THIS specific question, each ONE short line.
+- Include red flags, clichés, over-claims, rambling, irrelevant tangents, negativity about past employers, and anything that contradicts the profile or the job description.
+
+Rules:
+- Plain text bullets only — no markdown symbols, no numbering, no preamble, no closing remarks.
+- Use employer knowledge only if you are reasonably confident from general knowledge; never fabricate specific facts, clients, or figures about the employer.
+- Apply the user's permanent training instructions exactly when present.`;
+
+const LIVE_PROMPTER_DUAL_CLIENT = `You are an elite sales coach and consultant guiding a Tabalt representative DURING a live client meeting.
+For each client question you produce two lists the rep can use instantly.
+
+Return STRICT JSON only, in this exact shape:
+{ "whatToSay": string[], "whatToAvoid": string[] }
+
+whatToSay (3–6 items):
+- High-impact cues the rep SHOULD say, each ONE short line (max ~22 words). No paragraphs.
+- Ground cues in the Tabalt knowledge repository (deck, rate card, positioning, case studies). Never invent clients, pricing, or claims not supported by the materials.
+- Where useful, frame with STAR (Situation, Task, Action, Result) using real Tabalt case studies/examples.
+- Address the client's likely pain points (budget, risk, trust, speed) when relevant.
+
+whatToAvoid (3–5 items):
+- What the rep should NOT say or do for THIS question, each ONE short line (over-promising, fabricated metrics, discounting too early, badmouthing competitors, vague claims).
+
+Rules:
+- Plain text bullets only — no markdown symbols, no numbering, no preamble.
+- Apply the user's permanent training instructions exactly when present.`;
+
+const parseDualSuggestion = (raw) => {
+  const fallback = { whatToSay: [], whatToAvoid: [] };
+  const text = normalizeAssistantText(raw);
+  if (!text) return fallback;
+  let parsed = null;
+  try {
+    parsed = JSON.parse(text);
+  } catch (_) {
+    const match = text.match(/\{[\s\S]*\}/);
+    if (match) {
+      try {
+        parsed = JSON.parse(match[0]);
+      } catch (__) {
+        parsed = null;
+      }
+    }
+  }
+  if (!parsed || typeof parsed !== 'object') return fallback;
+
+  const clean = (arr) =>
+    Array.isArray(arr)
+      ? arr
+          .map((item) => String(item || '').replace(/^\s*[-*•]\s*/, '').replace(/\s+/g, ' ').trim())
+          .filter(Boolean)
+          .slice(0, 8)
+      : [];
+
+  return {
+    whatToSay: clean(parsed.whatToSay),
+    whatToAvoid: clean(parsed.whatToAvoid)
+  };
+};
+
+/**
+ * Live dual-answer generator: returns { whatToSay: string[], whatToAvoid: string[] }.
+ * Model is configurable via OPENAI_LIVE_PROMPTER_MODEL || OPENAI_MODEL || 'gpt-4o-mini'.
+ * Reasoning models (gpt-5*, o1/o3/o4) automatically use max_completion_tokens and drop temperature.
+ *
+ * @param {{ questions: string[], structuredProfile: string, trainingInstructions?: string,
+ *          jobDescription?: string, employerName?: string, prompterMode?: 'interview'|'clientMeeting' }} params
+ * @returns {Promise<{ whatToSay: string[], whatToAvoid: string[] }>}
+ */
+const livePrompterSuggestDual = async ({
+  questions,
+  structuredProfile,
+  trainingInstructions,
+  jobDescription,
+  employerName,
+  prompterMode = 'interview'
+}) => {
+  const client = getOpenAIClient();
+  if (!client) {
+    throw new Error('OpenAI is not configured (OPENAI_API_KEY).');
+  }
+  const qs = (questions || []).map((q) => String(q).trim()).filter(Boolean);
+  if (!qs.length) {
+    throw new Error('At least one question is required.');
+  }
+
+  const base = prompterMode === 'clientMeeting' ? LIVE_PROMPTER_DUAL_CLIENT : LIVE_PROMPTER_DUAL_INTERVIEW;
+  const train = (trainingInstructions || '').trim();
+  let systemContent = base;
+  if (train) {
+    systemContent += `\n\n--- User's permanent training instructions (apply to every answer) ---\n${train.slice(0, 8000)}`;
+  }
+
+  const profile = (structuredProfile || 'Empty.').slice(0, 60000);
+  const numbered = qs.map((q, i) => `${i + 1}. ${q}`).join('\n');
+  const repoLabel =
+    prompterMode === 'clientMeeting' ? 'Tabalt knowledge repository' : 'Candidate profile (knowledge repository)';
+
+  const contextParts = [];
+  if (prompterMode !== 'clientMeeting') {
+    const jd = String(jobDescription || '').trim();
+    const employer = String(employerName || '').trim();
+    if (employer) {
+      contextParts.push(
+        `Target employer: ${employer.slice(0, 200)}. Use what you reliably know about this employer (industry, focus, likely priorities) to tailor cues. Do not fabricate specific facts.`
+      );
+    }
+    if (jd) {
+      contextParts.push(`Target job description:\n${jd.slice(0, 6000)}`);
+    }
+  }
+  const contextBlock = contextParts.length ? `\n\n${contextParts.join('\n\n')}` : '';
+
+  const userContent = `Interviewer question(s):
+${numbered}
+
+${repoLabel}:
+${profile}${contextBlock}
+
+Return JSON only: { "whatToSay": [...], "whatToAvoid": [...] }.`;
+
+  const model = process.env.OPENAI_LIVE_PROMPTER_MODEL || process.env.OPENAI_MODEL || 'gpt-4o-mini';
+  const reasoning = /^(gpt-5(?!-chat)|o1|o3|o4)/i.test(model);
+
+  const body = {
+    model,
+    messages: [
+      { role: 'system', content: systemContent },
+      { role: 'user', content: userContent }
+    ],
+    response_format: { type: 'json_object' }
+  };
+  if (reasoning) {
+    body.max_completion_tokens = positiveIntFromEnv(process.env.OPENAI_LIVE_PROMPTER_MAX_TOKENS, 1600, 256);
+  } else {
+    body.temperature = numberFromEnv(process.env.OPENAI_LIVE_PROMPTER_TEMPERATURE, 0.4);
+    body.max_tokens = positiveIntFromEnv(process.env.OPENAI_LIVE_PROMPTER_MAX_TOKENS, 900, 200);
+  }
+
+  const completion = await client.chat.completions.create(body);
+  const result = parseDualSuggestion(completion.choices?.[0]?.message?.content);
+  if (!result.whatToSay.length && !result.whatToAvoid.length) {
+    throw new Error('OpenAI returned an empty suggestion.');
+  }
+  return result;
+};
+
 module.exports = {
   generateAIResponse,
   generateDeckJsonFromPrompt,
@@ -910,6 +1070,7 @@ module.exports = {
   getOpenAIClient,
   livePrompterSummarizeKnowledge,
   livePrompterSuggestAnswer,
+  livePrompterSuggestDual,
   livePrompterCleanQuestion,
   livePrompterSuggestPointers
 };

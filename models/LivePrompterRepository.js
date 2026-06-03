@@ -60,7 +60,11 @@ const livePrompterRepositorySchema = new mongoose.Schema(
     trainingInstructions: { type: String, default: '' },
     trainingInstructionsUpdatedAt: { type: Date },
     /** Correct spellings for names/brands (fuzzy-corrected in transcripts). */
-    glossaryTerms: { type: [String], default: [] }
+    glossaryTerms: { type: [String], default: [] },
+    /** Interview-mode context: target role JD + employer name (for sharper, employer-aware answers). */
+    jobDescription: { type: String, default: '' },
+    employerName: { type: String, default: '' },
+    interviewContextUpdatedAt: { type: Date }
   },
   { timestamps: true }
 );

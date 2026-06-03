@@ -14,6 +14,7 @@ const { extractQuestionsFromPausedTranscript } = require('../utils/livePrompterQ
 const {
   livePrompterSummarizeKnowledge,
   livePrompterSuggestAnswer,
+  livePrompterSuggestDual,
   livePrompterCleanQuestion,
   livePrompterSuggestPointers
 } = require('../services/openaiService');
@@ -176,9 +177,15 @@ function serializeRepo(repo) {
     trainingInstructions: o.trainingInstructions || '',
     trainingInstructionsUpdatedAt: o.trainingInstructionsUpdatedAt || null,
     glossaryTerms: Array.isArray(o.glossaryTerms) ? o.glossaryTerms.filter(Boolean) : [],
+    jobDescription: o.jobDescription || '',
+    employerName: o.employerName || '',
+    interviewContextUpdatedAt: o.interviewContextUpdatedAt || null,
     updatedAt: o.updatedAt
   };
 }
+
+const MAX_JD_CHARS = 8000;
+const MAX_EMPLOYER_CHARS = 200;
 
 // @route   GET /api/admin/live-prompter/repository
 router.get('/repository', protect, authorize('admin'), async (req, res) => {
@@ -304,6 +311,25 @@ router.put('/training', protect, authorize('admin'), async (req, res) => {
     const repo = await getOrCreateRepo(req.user._id);
     repo.trainingInstructions = trainingInstructions;
     repo.trainingInstructionsUpdatedAt = new Date();
+    await repo.save();
+    res.json(serializeRepo(repo));
+  } catch (e) {
+    res.status(500).json({ message: e.message || 'Server error' });
+  }
+});
+
+// @route   PUT /api/admin/live-prompter/interview-context
+// Body: { jobDescription?, employerName? } — role JD + employer for sharper interview answers.
+router.put('/interview-context', protect, authorize('admin'), async (req, res) => {
+  try {
+    const repo = await getOrCreateRepo(req.user._id);
+    if (typeof req.body?.jobDescription === 'string') {
+      repo.jobDescription = req.body.jobDescription.slice(0, MAX_JD_CHARS);
+    }
+    if (typeof req.body?.employerName === 'string') {
+      repo.employerName = req.body.employerName.trim().slice(0, MAX_EMPLOYER_CHARS);
+    }
+    repo.interviewContextUpdatedAt = new Date();
     await repo.save();
     res.json(serializeRepo(repo));
   } catch (e) {
@@ -472,15 +498,59 @@ router.post('/prompt', protect, authorize('admin'), async (req, res) => {
       });
     }
 
-    const suggestion = await livePrompterSuggestAnswer({
+    const dual = await livePrompterSuggestDual({
       questions,
       structuredProfile: profile,
       trainingInstructions,
+      jobDescription: mode === 'interview' ? repo.jobDescription || '' : '',
+      employerName: mode === 'interview' ? repo.employerName || '' : '',
       prompterMode: mode
     });
-    res.json({ suggestion, cleanedQuestion: cleanedQuestion || undefined });
+    res.json({
+      whatToSay: dual.whatToSay,
+      whatToAvoid: dual.whatToAvoid,
+      cleanedQuestion: cleanedQuestion || undefined
+    });
   } catch (e) {
     res.status(500).json({ message: e.message || 'Prompt failed' });
+  }
+});
+
+// @route   POST /api/admin/live-prompter/test-answer
+// Body: { question, mode } — "play & check" box in Train Your AI: preview the dual answer for a typed question.
+router.post('/test-answer', protect, authorize('admin'), async (req, res) => {
+  try {
+    const repo = await LivePrompterRepository.findOne({ userId: req.user._id });
+    if (!repo) {
+      return res.status(400).json({ message: 'Repository not found.' });
+    }
+    await migrateLegacyKnowledge(repo);
+
+    const mode = MODES.includes(req.body?.mode) ? req.body.mode : parseMode(repo.activeMode);
+    const bank = getBank(repo, mode);
+    const profile = bank?.structuredProfile?.trim() || '';
+    if (!profile) {
+      return res.status(400).json({
+        message: `Knowledge profile is empty for ${mode === 'clientMeeting' ? 'Client Meeting' : 'Interview'} mode. Run “Generate / Refresh Knowledge Summary” first.`
+      });
+    }
+
+    const question = typeof req.body?.question === 'string' ? req.body.question.trim() : '';
+    if (!question) {
+      return res.status(400).json({ message: 'Type a question to test.' });
+    }
+
+    const dual = await livePrompterSuggestDual({
+      questions: [question],
+      structuredProfile: profile,
+      trainingInstructions: (repo.trainingInstructions || '').trim(),
+      jobDescription: mode === 'interview' ? repo.jobDescription || '' : '',
+      employerName: mode === 'interview' ? repo.employerName || '' : '',
+      prompterMode: mode
+    });
+    res.json({ whatToSay: dual.whatToSay, whatToAvoid: dual.whatToAvoid });
+  } catch (e) {
+    res.status(500).json({ message: e.message || 'Test failed' });
   }
 });
 
